@@ -20,15 +20,17 @@ import org.rstudio.studio.client.workbench.views.source.editors.text.ace.Range;
 
 public class ChunkExecUnit
 {
-   public ChunkExecUnit(Scope scope)
+   public ChunkExecUnit(Scope scope, int execMode)
    {
-      this(scope, null);
+      this(scope, null, execMode, NotebookQueueUnit.EXEC_SCOPE_CHUNK);
    }
-
-   public ChunkExecUnit(Scope scope, Range range)
+   
+   public ChunkExecUnit(Scope scope, Range range, int execMode, int execScope)
    {
       scope_ = scope;
       range_ = range;
+      execMode_ = execMode;
+      execScope_ = execScope;
    }
    
    public Scope getScope()
@@ -43,10 +45,16 @@ public class ChunkExecUnit
 
    public int getExecScope()
    {
-      return range_ == null ? NotebookQueueUnit.EXEC_SCOPE_CHUNK :
-         NotebookQueueUnit.EXEC_SCOPE_PARTIAL;
+      return execScope_;
+   }
+   
+   public int getExecMode()
+   {
+      return execMode_;
    }
    
    private final Scope scope_;
    private final Range range_;
+   private final int execScope_;
+   private final int execMode_;
 }

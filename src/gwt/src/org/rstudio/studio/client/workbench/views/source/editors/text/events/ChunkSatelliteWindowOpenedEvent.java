@@ -62,6 +62,12 @@ public class ChunkSatelliteWindowOpenedEvent
    {
       handler.onChunkSatelliteWindowOpened(this);
    }
+
+   @Override
+   public boolean forward()
+   {
+      return true;
+   }
    
    private String docId_;
    private String chunkId_;

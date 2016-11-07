@@ -233,7 +233,9 @@ private:
       // execution context, it must be executing with an alternate engine; 
       // this event signals that the alternate engine is finished, so move to
       // the next document in the queue
-      if (execUnit_->docId() == docId && execUnit_->chunkId() == chunkId &&
+      if (execUnit_->docId() == docId && 
+          execUnit_->chunkId() == chunkId &&
+          execUnit_->execScope() != ExecScopeInline &&
           !execContext_)
       {
          // remove from the queue
@@ -358,12 +360,6 @@ private:
          return skipUnit();
       }
 
-      // skip unit if it has no code to execute
-      if (!unit->hasPendingRanges())
-      {
-         return skipUnit();
-      }
-
       // compute context
       std::string ctx = docQueue->commitMode() == ModeCommitted ?
          kSavedCtx : notebookCtxId();
@@ -375,15 +371,49 @@ private:
       if (label == "setup")
          prepareSetupContext();
 
+      // is there external code for this chunk? if so, replace the chunk's
+      // code with the code from the external file; see:
+      // http://yihui.name/knitr/demo/externalization/
+      if (unit->execScope() == ExecScopeChunk)
+      {
+         std::string external = docQueue->externalChunk(label);
+         if (!external.empty())
+            unit->replaceCode(external);
+      }
+
+      // skip unit if it has no code to execute
+      if (!unit->hasPendingRanges())
+      {
+         return skipUnit();
+      }
+
       // compute engine
       std::string engine = options.getOverlayOption("engine", std::string("r"));
+
+      // normalize engine case - if the chunk doesn't have an engine specified
+      // it will receive the knitr default of "R"
+      if (engine == "R")
+         engine = "r";
+
       if (engine == "r")
       {
-         execContext_ = boost::make_shared<ChunkExecContext>(
-            unit->docId(), unit->chunkId(), ctx, unit->execScope(), 
-            docQueue->workingDir(), options, docQueue->pixelWidth(), 
-            docQueue->charWidth());
-         execContext_->connect();
+         // establish execution context unless we're an inline chunk
+         if (unit->execScope() != ExecScopeInline)
+         {
+            // look up the working directory of the document as long as we
+            // aren't in the setup chunk, which always computes paths relative
+            // to the document so that relative paths in the setup chunk, such
+            // as those used in root.dir, have a reliable origin
+            core::FilePath workingDir;
+            if (label != "setup")
+               workingDir = docQueue->workingDir();
+
+            execContext_ = boost::make_shared<ChunkExecContext>(
+               unit->docId(), unit->chunkId(), ctx, unit->execScope(), 
+               workingDir, options, docQueue->pixelWidth(), 
+               docQueue->charWidth());
+            execContext_->connect();
+         }
          execUnit_ = unit;
          enqueueExecStateChanged(ChunkExecStarted, options.chunkOptions());
       }
@@ -522,7 +552,61 @@ private:
 
       r::sexp::Protect protect;
       SEXP resultSEXP = R_NilValue;
-      Error error = r::exec::RFunction(".rs.defaultChunkOptions")
+
+      // record the contents of external code chunks
+      Error error = r::exec::evaluateString(
+            "knitr:::knit_code$get()", &resultSEXP, &protect);
+      if (error)
+         LOG_ERROR(error);
+      else if (r::sexp::isList(resultSEXP))
+      {
+         json::Value externals;
+         r::json::jsonValueFromList(resultSEXP, &externals);
+         if (externals.type() == json::ObjectType)
+         {
+            error = setChunkValue(docPath, execContext_->docId(), 
+                  kChunkExternals, externals.get_obj());
+            if (error)
+               LOG_ERROR(error);
+
+            if (!queue_.empty())
+               queue_.front()->setExternalChunks(externals.get_obj());
+         }
+      }
+
+      // record the root directory
+      error = r::exec::evaluateString(
+            "knitr::opts_knit$get(\"root.dir\")", &resultSEXP, &protect);
+      if (error)
+         LOG_ERROR(error);
+      if (TYPEOF(resultSEXP) != NILSXP)
+      {
+         std::string workingDir = r::sexp::safeAsString(resultSEXP, "");
+
+         // write working dir to the cache (just use unresolved string; the
+         // string will be resolved to a path in setWorkingDir)
+         Error error = setChunkValue(docPath, execContext_->docId(), 
+               kChunkWorkingDir, workingDir);
+         if (error)
+            LOG_ERROR(error);
+
+         // update running queue if present
+         if (!queue_.empty() && !workingDir.empty())
+            queue_.front()->setWorkingDir(workingDir);
+      }
+      else if (!error)
+      {
+         // we succeeded in checking root.dir but it was set to NULL; clear
+         // the root directory stored in the cache
+         error = setChunkValue(docPath, execContext_->docId(), 
+               kChunkWorkingDir, json::Value());
+         if (error)
+            LOG_ERROR(error);
+         if (!queue_.empty())
+            queue_.front()->setWorkingDir("");
+      }
+
+      error = r::exec::RFunction(".rs.defaultChunkOptions")
                                       .call(&resultSEXP, &protect);
       if (error)
          LOG_ERROR(error);
@@ -542,42 +626,6 @@ private:
             if (!queue_.empty())
                queue_.front()->setDefaultChunkOptions(defaults.get_obj());
          }
-      }
-
-      // record the root directory
-      error = r::exec::evaluateString(
-            "knitr::opts_knit$get(\"root.dir\")", &resultSEXP, &protect);
-      if (error)
-         LOG_ERROR(error);
-      if (TYPEOF(resultSEXP) != NILSXP)
-      {
-         std::string workingDir = r::sexp::safeAsString(resultSEXP, "");
-         FilePath dir;
-         if (!workingDir.empty())
-            dir = module_context::resolveAliasedPath(workingDir);
-         if (dir.exists())
-         {
-            // write working dir to the cache
-            Error error = setChunkValue(docPath, execContext_->docId(), 
-                  kChunkWorkingDir, workingDir);
-            if (error)
-               LOG_ERROR(error);
-
-            // update running queue if present
-            if (!queue_.empty())
-               queue_.front()->setWorkingDir(dir);
-         }
-      }
-      else if (!error)
-      {
-         // we succeeded in checking root.dir but it was set to NULL; clear
-         // the root directory stored in the cache
-         error = setChunkValue(docPath, execContext_->docId(), 
-               kChunkWorkingDir, json::Value());
-         if (error)
-            LOG_ERROR(error);
-         if (!queue_.empty())
-            queue_.front()->setWorkingDir(FilePath());
       }
    }
 

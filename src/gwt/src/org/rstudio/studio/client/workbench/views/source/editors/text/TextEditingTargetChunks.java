@@ -60,6 +60,13 @@ public class TextEditingTargetChunks
    }
 
    @Override
+   public void onLineWidgetAdded(LineWidget widget)
+   {
+      // no action necessary; this just lets us know that a chunk toolbar has
+      // been attached to the DOM
+   }
+
+   @Override
    public void onLineWidgetRemoved(LineWidget widget)
    {
       // remove the widget from our internal list
@@ -100,9 +107,12 @@ public class TextEditingTargetChunks
    private void initialize(UIPrefs prefs, AceThemes themes)
    {
       themes_ = themes;
+      prefs_ = prefs;
+      
       dark_ = themes_.isDark(themes_.getEffectiveThemeName(
             prefs.theme().getValue()));
-      prefs.theme().addValueChangeHandler(new ValueChangeHandler<String>()
+      
+      prefs_.theme().addValueChangeHandler(new ValueChangeHandler<String>()
       {
          @Override
          public void onValueChange(ValueChangeEvent<String> theme)
@@ -124,6 +134,21 @@ public class TextEditingTargetChunks
             }
          }
       });
+      
+      prefs_.showInlineToolbarForRCodeChunks().addValueChangeHandler(new ValueChangeHandler<Boolean>()
+      {
+         @Override
+         public void onValueChange(ValueChangeEvent<Boolean> event)
+         {
+            lastRow_ = 0;
+            boolean showToolbars = event.getValue();
+            
+            if (showToolbars)
+               syncWidgets();
+            else
+               removeAllToolbars();
+         }
+      });
    }
    
    private void removeAllToolbars()
@@ -135,6 +160,11 @@ public class TextEditingTargetChunks
    
    private void syncWidgets()
    {
+      // bail early if we don't want to render inline toolbars
+      boolean showInlineToolbars = prefs_.showInlineToolbarForRCodeChunks().getValue();
+      if (!showInlineToolbars)
+         return;
+      
       Scope currentScope = target_.getDocDisplay().getCurrentScope();
       if (initialized_ && currentScope != null && 
           lastRow_ == currentScope.getPreamble().getRow())
@@ -233,7 +263,9 @@ public class TextEditingTargetChunks
    
    private boolean dark_;
    private boolean initialized_;
+   
    private AceThemes themes_;
+   private UIPrefs prefs_;
 
    private int lastRow_;
    

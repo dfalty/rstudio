@@ -64,6 +64,7 @@ import org.rstudio.studio.client.workbench.commands.Commands;
 import org.rstudio.studio.client.workbench.model.Session;
 import org.rstudio.studio.client.workbench.model.SessionUtils;
 import org.rstudio.studio.client.workbench.prefs.model.UIPrefs;
+import org.rstudio.studio.client.workbench.prefs.model.UIPrefsAccessor;
 import org.rstudio.studio.client.workbench.views.edit.ui.EditDialog;
 import org.rstudio.studio.client.workbench.views.source.DocumentOutlineWidget;
 import org.rstudio.studio.client.workbench.views.source.PanelWithToolbars;
@@ -215,8 +216,11 @@ public class TextEditingTargetWidget
    {
       if (target_.getPreferredOutlineWidgetVisibility())
       {
-         double size = target_.getPreferredOutlineWidgetSize();
+         double editorSize = editorPanel_.getOffsetWidth();
+         double widgetSize = target_.getPreferredOutlineWidgetSize();
+         double size = Math.min(editorSize, widgetSize);
          editorPanel_.setWidgetSize(docOutlineWidget_, size);
+         toggleDocOutlineButton_.setLatched(true);
       }
    }
    
@@ -265,6 +269,12 @@ public class TextEditingTargetWidget
       toolbar.addLeftWidget(compilePdfButton_ = commands_.compilePDF().createToolbarButton());
       rmdFormatButton_ = new ToolbarPopupMenuButton(false, true);
       toolbar.addLeftWidget(rmdFormatButton_);
+      
+      runDocumentMenuButton_ = new ToolbarPopupMenuButton(false, true);
+      addClearKnitrCacheMenu(runDocumentMenuButton_);
+      runDocumentMenuButton_.addSeparator();
+      runDocumentMenuButton_.addMenuItem(commands_.clearPrerenderedOutput().createMenuItem(false), "");     
+      toolbar.addLeftWidget(runDocumentMenuButton_);
       
       ToolbarPopupMenu rmdOptionsMenu = new ToolbarPopupMenu();
       rmdOptionsMenu.addItem(commands_.editRmdFormatOptions().createMenuItem(false));
@@ -407,7 +417,7 @@ public class TextEditingTargetWidget
                   // animate to that position for a slightly nicer visual treatment.
                   final double destination = docOutlineWidget_.getOffsetWidth() > 5
                         ? 0
-                        : target_.getPreferredOutlineWidgetSize();
+                        : Math.min(editorPanel_.getOffsetWidth(), target_.getPreferredOutlineWidgetSize());
                   
                   // Update tooltip ('Show'/'Hide' depending on current visibility)
                   String title = toggleDocOutlineButton_.getTitle();
@@ -867,8 +877,20 @@ public class TextEditingTargetWidget
       
       }
       
+      addClearKnitrCacheMenu(rmdFormatButton_);
+          
+      showRmdViewerMenuItems(true, canEditFormatOptions, fileType.isRmd(), 
+            RmdOutput.TYPE_STATIC);
+     
+      if (publishButton_ != null)
+         publishButton_.setIsStatic(true);
+      isShiny_ = false;
+   }
+   
+   private void addClearKnitrCacheMenu(ToolbarPopupMenuButton menuButton)
+   {
       final AppCommand clearKnitrCache = commands_.clearKnitrCache();
-      rmdFormatButton_.addSeparator();
+      menuButton.addSeparator();
       ScheduledCommand cmd = new ScheduledCommand()
       {
          @Override
@@ -880,19 +902,13 @@ public class TextEditingTargetWidget
       MenuItem item = new MenuItem(clearKnitrCache.getMenuHTML(false),
                                    true,
                                    cmd); 
-      rmdFormatButton_.addMenuItem(item, clearKnitrCache.getMenuLabel(false));
-      
-      
-      showRmdViewerMenuItems(true, canEditFormatOptions, fileType.isRmd(), 
-            RmdOutput.TYPE_STATIC);
-     
-      if (publishButton_ != null)
-         publishButton_.setIsStatic(true);
-      isShiny_ = false;
+      menuButton.addMenuItem(item, clearKnitrCache.getMenuLabel(false));
    }
    
    @Override
-   public void setIsShinyFormat(boolean showOutputOptions, boolean isPresentation)
+   public void setIsShinyFormat(boolean showOutputOptions, 
+                                boolean isPresentation,
+                                boolean isShinyPrerendered)
    {
       setRmdFormatButtonVisible(false);
       
@@ -909,9 +925,18 @@ public class TextEditingTargetWidget
       knitDocumentButton_.setText(knitCommandText_);
       knitDocumentButton_.setLeftImage(StandardIcons.INSTANCE.run());
       
+      runDocumentMenuButton_.setVisible(isShinyPrerendered);
+      setKnitDocumentMenuVisible(isShinyPrerendered);
+      
       isShiny_ = true;
       if (publishButton_ != null)
          publishButton_.setIsStatic(false);
+   }
+   
+   @Override
+   public void setIsNotShinyFormat()
+   {
+      runDocumentMenuButton_.setVisible(false);
    }
    
    @Override
@@ -931,6 +956,11 @@ public class TextEditingTargetWidget
    private void setRmdFormatButtonVisible(boolean visible)
    {
       rmdFormatButton_.setVisible(visible);
+      setKnitDocumentMenuVisible(visible);
+   }
+   
+   private void setKnitDocumentMenuVisible(boolean visible)
+   {
       knitDocumentButton_.getElement().getStyle().setMarginRight(
             visible ? 0 : 8, Unit.PX);
    }
@@ -1107,24 +1137,41 @@ public class TextEditingTargetWidget
          menu.addSeparator();
       }
       
+      menu.addSeparator();
+
+      String pref = uiPrefs_.showLatexPreviewOnCursorIdle().getValue();
+      menu.addItem(new DocPropMenuItem(
+            "Preview Images and Equations", docUpdateSentinel_, 
+            docUpdateSentinel_.getBoolProperty(
+               TextEditingTargetNotebook.CONTENT_PREVIEW_ENABLED, 
+               pref != UIPrefsAccessor.LATEX_PREVIEW_SHOW_NEVER),
+            TextEditingTargetNotebook.CONTENT_PREVIEW_ENABLED, 
+            DocUpdateSentinel.PROPERTY_TRUE));
+      menu.addItem(new DocPropMenuItem(
+            "Show Previews Inline", docUpdateSentinel_, 
+            docUpdateSentinel_.getBoolProperty(
+               TextEditingTargetNotebook.CONTENT_PREVIEW_INLINE, 
+                 pref == UIPrefsAccessor.LATEX_PREVIEW_SHOW_ALWAYS),
+            TextEditingTargetNotebook.CONTENT_PREVIEW_INLINE, 
+            DocUpdateSentinel.PROPERTY_TRUE));
+      menu.addSeparator();
+      
       if (uiPrefs_.showRmdChunkOutputInline().getValue() &&
           type != RmdOutput.TYPE_SHINY)
       {
-         if (type != RmdOutput.TYPE_NOTEBOOK)
-         {
-            menu.addItem(new DocPropMenuItem(
-                  "Chunk Output Inline", docUpdateSentinel_, 
-                  true, 
-                  TextEditingTargetNotebook.CHUNK_OUTPUT_TYPE, 
-                  TextEditingTargetNotebook.CHUNK_OUTPUT_INLINE));
-            menu.addItem(new DocPropMenuItem(
-                  "Chunk Output in Console", docUpdateSentinel_, 
-                  false, 
-                  TextEditingTargetNotebook.CHUNK_OUTPUT_TYPE, 
-                  TextEditingTargetNotebook.CHUNK_OUTPUT_CONSOLE));
-            menu.addSeparator();
-         }
+        menu.addItem(new DocPropMenuItem(
+              "Chunk Output Inline", docUpdateSentinel_,
+              true,
+              TextEditingTargetNotebook.CHUNK_OUTPUT_TYPE,
+              TextEditingTargetNotebook.CHUNK_OUTPUT_INLINE));
+        menu.addItem(new DocPropMenuItem(
+              "Chunk Output in Console", docUpdateSentinel_,
+              false,
+              TextEditingTargetNotebook.CHUNK_OUTPUT_TYPE,
+              TextEditingTargetNotebook.CHUNK_OUTPUT_CONSOLE));
          
+         menu.addSeparator();
+
          menu.addItem(commands_.notebookExpandAllOutput().createMenuItem(false));
          menu.addItem(commands_.notebookCollapseAllOutput().createMenuItem(false));
          menu.addSeparator();
@@ -1132,6 +1179,8 @@ public class TextEditingTargetWidget
          menu.addItem(commands_.notebookClearAllOutput().createMenuItem(false));
          menu.addSeparator();
       }
+      
+      menu.addSeparator();
            
       if (showOutputOptions)
          menu.addItem(commands_.editRmdFormatOptions().createMenuItem(false));
@@ -1171,6 +1220,7 @@ public class TextEditingTargetWidget
    private ToolbarButton rmdOptionsButton_;
    private LatchingToolbarButton toggleDocOutlineButton_;
    private ToolbarPopupMenuButton rmdFormatButton_;
+   private ToolbarPopupMenuButton runDocumentMenuButton_;
    private RSConnectPublishButton publishButton_;
    private MenuItem rmdViewerPaneMenuItem_;
    private MenuItem rmdViewerWindowMenuItem_;

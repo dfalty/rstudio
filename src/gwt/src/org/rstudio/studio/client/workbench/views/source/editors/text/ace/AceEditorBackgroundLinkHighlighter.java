@@ -150,7 +150,6 @@ public class AceEditorBackgroundLinkHighlighter
             highlighters_.add(webLinkHighlighter());
             if (fileType != null && (fileType.isMarkdown() || fileType.isRmd()))
                highlighters_.add(markdownLinkHighlighter());
-            
             nextHighlightStart_ = 0;
             timer_.schedule(700);
          }
@@ -403,7 +402,8 @@ public class AceEditorBackgroundLinkHighlighter
       final String title = BrowseCap.isMacintosh()
             ? "Open Link (Command+Click)"
             : "Open Link (Shift+Click)";
-      MarkerRenderer renderer = MarkerRenderer.create(styles, title);
+      MarkerRenderer renderer =
+            MarkerRenderer.create(editor.getWidget().getEditor(), styles, title);
       
       int markerId = editor.getSession().addMarker(anchoredRange, styles, renderer, true);
       registerActiveMarker(row, id, markerId, anchoredRange);
@@ -426,11 +426,12 @@ public class AceEditorBackgroundLinkHighlighter
       // use a regex that captures all non-space characters within
       // a web link, and then fix up the captured link by removing
       // trailing punctuation, etc. as required
-      Pattern reWebLink = Pattern.create("(?:https?://|www.)\\S+");
+      Pattern reWebLink = createWebLinkPattern();
       for (Match match = reWebLink.match(line, 0);
            match != null;
            match = match.nextMatch())
       {
+         // compute start, end index for discovered URL
          int startIdx = match.getIndex();
          int endIdx   = match.getIndex() + match.getValue().length();
          
@@ -439,39 +440,44 @@ public class AceEditorBackgroundLinkHighlighter
          if (token.hasType("string"))
             continue;
          
+         String url = match.getValue();
+         
+         // trim off enclosing brackets
+         if (!url.matches(reWebLink()))
+         {
+            startIdx++;
+            endIdx--;
+            url = url.substring(1, url.length() - 1);
+         }
+         
          // trim off trailing punctuation (characters unlikely
          // to be found at the end of a url)
-         String url = match.getValue();
          String trimmed = url.replaceAll("[,.?!@#$%^&*;:-]+$", "");
          endIdx -= (url.length() - trimmed.length());
          url = trimmed;
          
-         // attempt to trim off enclosing quotes, etc
-         int trimLeftCount = 0;
-         for (int index = startIdx - 1; index >= 0; index--)
-         {
-            char beforeStart = line.charAt(index);
-            boolean needsTrim =
-                  beforeStart == '('  && url.endsWith(")")  ||
-                  beforeStart == '['  && url.endsWith("]")  ||
-                  beforeStart == '{'  && url.endsWith("}")  ||
-                  beforeStart == '['  && url.endsWith("]")  ||
-                  beforeStart == '<'  && url.endsWith(">")  ||
-                  beforeStart == '"'  && url.endsWith("\"") ||
-                  beforeStart == '\'' && url.endsWith("'");
-
-            if (needsTrim)
-            {
-               url = url.substring(0, url.length() - 1);
-               trimLeftCount++;
-            }
-         }
-         
-         // apply trimming
-         endIdx -= trimLeftCount;
-         
+         // perform highlighting
          highlight(editor, row, startIdx, endIdx);
       }
+   }
+   
+   private static String reWebLink()
+   {
+      return "(?:\\w+://|www\\.)\\S+";
+   }
+   
+   private static Pattern createWebLinkPattern()
+   {
+      String rePattern = StringUtil.join(new String[] {
+            "\\{" + reWebLink() + "?\\}",
+            "\\(" + reWebLink() + "?\\)",
+            "\\[" + reWebLink() + "?\\]",
+            "\\<" + reWebLink() + "?\\>",
+            "'"   + reWebLink() + "'",
+            "\""  + reWebLink() + "\"",
+            reWebLink()
+      }, "|");
+      return Pattern.create(rePattern);
    }
    
    private Highlighter markdownLinkHighlighter()
@@ -719,22 +725,26 @@ public class AceEditorBackgroundLinkHighlighter
    {
       protected MarkerRenderer() {}
       
-      public static final native MarkerRenderer create(final String clazz, final String title) /*-{
-         var MarkerPrototype = $wnd.require("ace/layer/marker").Marker.prototype;
+      public static final native MarkerRenderer create(final AceEditorNative editor,
+                                                       final String clazz,
+                                                       final String title)
+      /*-{
+         var markerBack = editor.renderer.$markerBack;
          return $entry(function(html, range, left, top, config) {
-            var height = config.lineHeight;
-            var width = (range.end.column - range.start.column) * config.characterWidth;
-
-            var top  = MarkerPrototype.$getTop(range.start.row, config);
-            var left = 4 + range.start.column * config.characterWidth;
-
-            html.push(
-                "<div title='" + title + "' class='", clazz, "' style='",
-                "height:", height, "px;",
-                "width:", width, "px;",
-                "top:", top, "px;",
-                "left:", left, "px;", "'></div>"
-            );
+            // HACK: we take advantage of an implementation detail of
+            // Ace's 'drawTextMarker' implementation. Ace constructs
+            // HTML for the generated markers with code of the form:
+            //
+            //    html = "<div style='..." + extraStyle + "'>"
+            //
+            // We take advantage of this, and inject our 'extraStyle'
+            // to close the style attribute we were intended to be
+            // locked in, and instead inject a 'title' attribute instead.
+            var extra = "' title='" + title;
+            if (range.isMultiLine())
+               return markerBack.drawTextMarker(html, range, clazz, config, extra);
+            else
+               return markerBack.drawSingleLineMarker(html, range, clazz, config, 0, extra);
          });
       }-*/;
    }

@@ -328,6 +328,8 @@ public interface DocDisplay extends HasValueChangeHandlers<Void>,
    void retokenizeDocument();
    Token getTokenAt(int row, int column);
    Token getTokenAt(Position position);
+   JsArray<Token> getTokens(int row);
+   
    TokenIterator createTokenIterator();
    TokenIterator createTokenIterator(Position position);
 
@@ -402,6 +404,7 @@ public interface DocDisplay extends HasValueChangeHandlers<Void>,
    void removeAllLineWidgets();
    void onLineWidgetChanged(LineWidget widget); 
    
+   boolean hasLineWidgets();
    JsArray<LineWidget> getLineWidgets();
    LineWidget getLineWidgetForRow(int row);
    
@@ -419,6 +422,4 @@ public interface DocDisplay extends HasValueChangeHandlers<Void>,
    void goToLineEnd();
    
    void toggleTokenInfo();
-   
-   void renderLatex(Range range);
 }

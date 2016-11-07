@@ -36,14 +36,17 @@ public class ChunkChangeEvent
    {
       docId_ = null;
       chunkId_ = null;
+      requestId_ = null;
       row_ = 0;
       type_ = 0;
    }
 
-   public ChunkChangeEvent(String docId, String chunkId, int row, int type)
+   public ChunkChangeEvent(String docId, String chunkId, String requestId,
+         int row, int type)
    {
       docId_ = docId;
       chunkId_ = chunkId;
+      requestId_ = requestId;
       row_ = row;
       type_ = type;
    }
@@ -68,6 +71,11 @@ public class ChunkChangeEvent
       return type_;
    }
    
+   public String getRequestId()
+   {
+      return requestId_;
+   }
+   
    @Override
    protected void dispatch(ChunkChangeEvent.Handler handler)
    {
@@ -80,8 +88,15 @@ public class ChunkChangeEvent
       return TYPE;
    }
    
+   @Override
+   public boolean forward()
+   {
+      return false;
+   }
+   
    private String docId_;
    private String chunkId_;
+   private String requestId_;
    private int row_;
    private int type_;
    

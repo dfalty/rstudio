@@ -23,6 +23,7 @@ import com.google.gwt.dom.client.Element;
 import com.google.gwt.dom.client.Style;
 import com.google.gwt.dom.client.Style.Unit;
 import com.google.gwt.user.client.Command;
+import com.google.gwt.user.client.Timer;
 import com.google.gwt.user.client.ui.Widget;
 
 public class ChunkHtmlPage extends ChunkOutputPage
@@ -63,21 +64,51 @@ public class ChunkHtmlPage extends ChunkOutputPage
          content_ = frame_;
       }
 
-      frame_.loadUrl(url, new Command()
+      frame_.loadUrlDelayed(url, 400, new Command() 
       {
          @Override
          public void execute()
          {
             Element body = frame_.getDocument().getBody();
             Style bodyStyle = body.getStyle();
-            
+      
             bodyStyle.setPadding(0, Unit.PX);
             bodyStyle.setMargin(0, Unit.PX);
+
             onEditorThemeChanged(ChunkOutputWidget.getEditorColors());
-            
-            onRenderComplete.execute();
+
+            Timer frameFinishLoadTimer = new Timer()
+            {
+               @Override
+               public void run()
+               {
+                  onRenderComplete.execute();
+               }
+            };
+
+            frameFinishLoadTimer.schedule(100);
          };
       });
+
+      afterRender_ = new Command() {
+         @Override
+         public void execute()
+         {
+            Element body = frame_.getDocument().getBody();
+
+            Style bodyStyle = body.getStyle();
+      
+            bodyStyle.setPadding(0, Unit.PX);
+            bodyStyle.setMargin(0, Unit.PX);
+
+            if (themeColors_ != null)
+            {
+               bodyStyle.setColor(themeColors_.foreground);
+            }
+         }
+      };
+
+      frame_.runAfterRender(afterRender_);
    }
       
    @Override
@@ -95,18 +126,19 @@ public class ChunkHtmlPage extends ChunkOutputPage
    @Override
    public void onSelected()
    {
-      // no action necessary for HTML widgets
+      frame_.runAfterRender(afterRender_);
    }
 
    @Override
    public void onEditorThemeChanged(Colors colors)
    {
-      Element body = frame_.getDocument().getBody();
-      Style bodyStyle = body.getStyle();
-      bodyStyle.setColor(colors.foreground);
+      themeColors_ = colors;
+      afterRender_.execute();
    }
 
    private ChunkOutputFrame frame_;
    final private Widget thumbnail_;
    final private Widget content_;
+   private Colors themeColors_ = null;
+   private Command afterRender_;
 }

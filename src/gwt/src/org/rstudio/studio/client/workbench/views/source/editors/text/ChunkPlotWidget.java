@@ -125,7 +125,6 @@ public class ChunkPlotWidget extends Composite
          conditions_.onEditorThemeChanged(ChunkOutputWidget.getEditorColors());
          outer.add(conditions_);
          outer.add(root);
-         outer.setHeight("100%");
          outer.setWidth("100%");
          
          if (chunkOutputSize_ == ChunkOutputSize.Full)
@@ -137,6 +136,14 @@ public class ChunkPlotWidget extends Composite
             outer.getElement().getStyle().setProperty("msFlexDirection", "column");
             outer.getElement().getStyle().setProperty("webkitFlexDirection", "column");
             outer.getElement().getStyle().setProperty("flexDirection", "column");
+
+            outer.getElement().getStyle().setProperty("msFlexGrow", "1");
+            outer.getElement().getStyle().setProperty("webkitFlexGrow", "1");
+            outer.getElement().getStyle().setProperty("flexGrow", "1");
+         }
+         else
+         {
+            outer.setHeight("100%");
          }
          
          root = outer;

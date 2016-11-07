@@ -21,7 +21,11 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
     return("")
    }
 
-   return(paste(parsed$rmd, collapse = "\n"))
+   # as this string will be eventually written to (and compared with) files
+   # on disk, use native line endings
+   return(paste(parsed$rmd,
+                collapse = ifelse(identical(.Platform$OS.type, "windows"),
+                                  "\r\n", "\n")))
 })
 
 .rs.addFunction("reRmdChunkBegin", function()
@@ -92,6 +96,9 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
    names(chunkInfo$chunk_definitions) <-
       unlist(lapply(chunkInfo$chunk_definitions, `[[`, "chunk_id"))
    rnbData[["chunk_info"]] <- chunkInfo
+
+   # Read external chunks (code chunks defined in other files)
+   rnbData[["external_chunks"]] <- chunkInfo$external_chunks
    
    # Read the chunk data
    chunkDirs <- file.path(cachePath, names(chunkInfo$chunk_definitions))
@@ -178,11 +185,17 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
                                                     includeSource,
                                                     ...)
 {
+   Encoding(fileContents) <- "UTF-8"
    parsed <- .rs.rnb.readConsoleData(fileContents)
+   
+   # exclude source code if requested
    if (!includeSource)
       parsed <- parsed[parsed$type != 0, ]
+   
+   # exclude console output if requested
    if (identical(context$results, "hide"))
       parsed <- parsed[parsed$type != 1, ]
+   
    attributes <- list(class = .rs.rnb.engineToCodeClass(context$engine))
    rendered <- .rs.rnb.renderConsoleData(parsed,
                                          attributes = attributes,
@@ -241,7 +254,7 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
    data <- .rs.readDataCapture(rdfPath)
    
    paste(
-      "<div data-pagedtable>",
+      "<div data-pagedtable=\"false\">",
       "  <script data-pagedtable-source type=\"application/json\">",
       jsonlite::toJSON(data),
       "  </script>",
@@ -284,6 +297,14 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
       if (is.null(chunkId)) {
          if (includeSource) {
             attributes <- list(class = .rs.rnb.engineToCodeClass(context$engine))
+            
+            # tidy code if necessary
+            if (isTRUE(context$tidy)) {
+               args <- c(list(text = code, output = FALSE), context$tidy.opts)
+               formatted <- do.call(formatR::tidy_source, args)
+               code <- formatted$text.tidy
+            }
+            
             if (!is.null(context$indent)) {
                return(.rs.rnb.renderVerbatimConsoleInput(code, tolower(context$engine), ""))
             } else {
@@ -330,10 +351,22 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
                  includeSource = includeSource)
       })
       
-      # remove nulls and return
-      Filter(Negate(is.null), outputList)
-      
+      # remove nulls
+      filtered <- Filter(Negate(is.null), outputList)
+      lapply(filtered, function(x) {
+         if (!is.list(x)) list(x) else x
+      })
    }
+})
+
+# SessionSourceDatabase.cpp
+.rs.addFunction("getSourceDocumentProperties", function(path, includeContents = FALSE)
+{
+   if (!file.exists(path))
+      return(NULL)
+   
+   path <- normalizePath(path, winslash = "/", mustWork = TRUE)
+   .Call("rs_getDocumentProperties", path, includeContents)
 })
    
 .rs.addFunction("createNotebookFromCacheData", function(rnbData,
@@ -344,14 +377,27 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
    if (is.null(outputFile))
       outputFile <- .rs.withChangedExtension(inputFile, ext = ".nb.html")
 
-   # TODO: pass encoding from frontend
-   encoding <- "UTF-8"
+   # specify default encoding (we'll try to infer + convert to UTF-8
+   # if necessary)
+   encoding <- getOption("encoding")
+   
+   # attempt to get encoding from source database (note: this will only
+   # succeed for files already open in the IDE, but since this operation
+   # is normally called when attempting to preview / create a notebook on
+   # save we generally expect the document to be available)
+   properties <- .rs.getSourceDocumentProperties(inputFile, FALSE)
+   if (!is.null(properties$encoding))
+      encoding <- properties$encoding
    
    # reset the knitr chunk counter (it can be modified as a side effect of
    # parse_params, which is called during notebook execution)
    knitr:::chunk_counter(reset = TRUE)
 
-   # implement output_source
+   # restore external chunks into the knit environment
+   if (!is.null(rnbData$external_chunks)) 
+      knitr:::knit_code$restore(rnbData$external_chunks)
+
+   # set up output_source
    outputOptions <- list(output_source = .rs.rnb.outputSource(rnbData))
    
    # call render with special format hooks
@@ -433,15 +479,24 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
       type <- csvData$type[[range$start]]
       text <- csvData$text[range$start:range$end]
       collapse <- if (type == 0) "\n" else ""
-      pasted <- paste(text, collapse = collapse)
+      code <- paste(text, collapse = collapse)
+      
       if (type == 0) {
+         
+         # tidy code if necessary
+         if (isTRUE(context$tidy)) {
+            args <- c(list(text = code, output = FALSE), context$tidy.opts)
+            formatted <- do.call(formatR::tidy_source, args)
+            code <- paste(formatted$text.tidy, collapse = "\n")
+         }
+         
          if (is.null(context$indent)) {
-            return(rmarkdown::html_notebook_output_code(pasted, attributes = attributes))
+            return(rmarkdown::html_notebook_output_code(code, attributes = attributes))
          } else {
-            return(.rs.rnb.renderVerbatimConsoleInput(pasted, tolower(context$engine), context$indent))
+            return(.rs.rnb.renderVerbatimConsoleInput(code, tolower(context$engine), context$indent))
          }
       } else {
-         return(pasted)
+         return(code)
       }
    })
    
@@ -578,7 +633,7 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
    chunkInfo <- .rs.extractRmdChunkInformation(nbData$rmd)
    
    outputPath <- function(cachePath, chunkId, index, ext) {
-      file.path(cachePath, chunkId, sprintf("%06s.%s", index, ext))
+      file.path(cachePath, chunkId, sprintf("%06i.%s", as.integer(index), ext))
    }
    
    # Text ----
@@ -897,13 +952,42 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
    grepl("^\\s*```{[Rr]\\s+setup[\\s,}]", lines[[1]], perl = TRUE)
 })
 
-.rs.addFunction("defaultChunkOptions", function()
-{
-   .rs.scalarListFromList(knitr::opts_chunk$get())
-})
-
 .rs.addFunction("setDefaultChunkOptions", function()
 {
-   knitr::opts_chunk$set(error = FALSE)
+   # cache the current set of chunk options
+   chunkOptions <- knitr::opts_chunk$get()
+   assign(".rs.knitr.chunkOptions", chunkOptions, envir = .rs.toolsEnv())
+
+   # cache the set of external code
+   knitrCode <- knitr:::knit_code$get()
+   assign(".rs.knitr.code", knitrCode, envir = .rs.toolsEnv())
+
+   # cache default working dir
+   knitrDir <- knitr::opts_knit$get("root.dir")
+   assign(".rs.knitr.root.dir", knitrDir, envir = .rs.toolsEnv())
+   
+   # unset the chunk options and code (so we know what options/code
+   # were actually specified in setup chunk later)
+   defaults <- list(error = FALSE)
+   knitr::opts_chunk$restore(defaults)
+   knitr:::knit_code$restore(list())
+   knitr::opts_knit$set(root.dir = NULL)
+})
+
+.rs.addFunction("defaultChunkOptions", function()
+{
+   # get current set of options
+   defaultOptions <- knitr::opts_chunk$get()
+   
+   # restore the previously cached knitr options and code
+   chunkOptions <- get(".rs.knitr.chunkOptions", envir = .rs.toolsEnv())
+   knitr::opts_chunk$restore(chunkOptions)
+   knitrCode <- get(".rs.knitr.code", envir = .rs.toolsEnv())
+   knitr:::knit_code$restore(knitrCode)
+   knitrDir <- get(".rs.knitr.root.dir", envir = .rs.toolsEnv())
+   knitr::opts_knit$set(root.dir = knitrDir)
+   
+   # return current set
+   .rs.scalarListFromList(defaultOptions)
 })
 

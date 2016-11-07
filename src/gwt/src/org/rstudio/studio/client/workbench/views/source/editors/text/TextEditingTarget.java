@@ -77,6 +77,7 @@ import org.rstudio.studio.client.common.filetypes.FileTypeCommands;
 import org.rstudio.studio.client.common.filetypes.FileTypeRegistry;
 import org.rstudio.studio.client.common.filetypes.SweaveFileType;
 import org.rstudio.studio.client.common.filetypes.TextFileType;
+import org.rstudio.studio.client.common.mathjax.MathJax;
 import org.rstudio.studio.client.common.r.roxygen.RoxygenHelper;
 import org.rstudio.studio.client.common.rnw.RnwWeave;
 import org.rstudio.studio.client.common.synctex.Synctex;
@@ -219,7 +220,10 @@ public class TextEditingTarget implements
       void debug_dumpContents();
       void debug_importDump();
       
-      void setIsShinyFormat(boolean showOutputOptions, boolean isPresentation);
+      void setIsShinyFormat(boolean showOutputOptions, 
+                            boolean isPresentation,
+                            boolean isShinyPrerendered);
+      void setIsNotShinyFormat();
       void setIsNotebookFormat();
       void setFormatOptions(TextFileType fileType,
                             boolean showRmdFormatMenu,
@@ -301,6 +305,11 @@ public class TextEditingTarget implements
             name_.fireChangeEvent();
             updateStatusBarLanguage();
             view_.adaptToFileType(newFileType_);
+            
+            // turn R Markdown behavior (inline execution, previews, etc.)
+            // based on whether we just became an R Markdown type
+            setRMarkdownBehaviorEnabled(newFileType_.isRmd());
+
             events_.fireEvent(new FileTypeChangedEvent());
             if (!fileType_.canSourceOnSave() && docUpdateSentinel_.sourceOnSave())
             {
@@ -778,6 +787,7 @@ public class TextEditingTarget implements
                   {
                      String message = getIncrementalSearchMessage();
                      if (StringUtil.isNullOrEmpty(message))
+                        
                      {
                         view_.getStatusBar().hideMessage();
                      }
@@ -996,6 +1006,12 @@ public class TextEditingTarget implements
    public SourcePosition currentPosition()
    {
       Position cursor = docDisplay_.getCursorPosition();
+      if (docDisplay_.hasLineWidgets())
+      {
+         // if we have line widgets, they create an non-reproducible scroll
+         // position, so use the cursor position only
+         return SourcePosition.create(cursor.getRow(), cursor.getColumn());
+      }
       return SourcePosition.create(getContext(), cursor.getRow(), 
             cursor.getColumn(), docDisplay_.getScrollTop());
    }
@@ -1201,7 +1217,7 @@ public class TextEditingTarget implements
       id_ = document.getId();
       fileContext_ = fileContext;
       fileType_ = (TextFileType) type;
-      codeExecution_ = new EditingTargetCodeExecution(docDisplay_, getId(), 
+      codeExecution_ = new EditingTargetCodeExecution(this, docDisplay_, getId(), 
             this);
       extendedType_ = document.getExtendedType();
       extendedType_ = rmarkdownHelper_.detectExtendedType(document.getContents(),
@@ -1235,9 +1251,8 @@ public class TextEditingTarget implements
       chunks_ = new TextEditingTargetChunks(this);
       notebook_ = new TextEditingTargetNotebook(this, chunks_, view_, 
             docDisplay_, dirtyState_, docUpdateSentinel_, document, 
-            releaseOnDismiss_);
+            releaseOnDismiss_, dependencyManager_);
       view_.addResizeHandler(notebook_);
-      
       
       // ensure that Makefile and Makevars always use tabs
       name_.addValueChangeHandler(new ValueChangeHandler<String>() {
@@ -1258,8 +1273,6 @@ public class TextEditingTarget implements
       
       name_.setValue(getNameFromDocument(document, defaultNameProvider), true);
       String contents = document.getContents();
-      if (!StringUtil.isNullOrEmpty(contents))
-         view_.initWidgetSize();
       docDisplay_.setCode(contents, false);
       
       // Load and apply folds.
@@ -1511,10 +1524,12 @@ public class TextEditingTarget implements
          docDisplay_.addOrUpdateBreakpoint(breakpoint);
       }
       
-      // for R Markdown docs, populate the popup menu with a list of available
-      // formats
       if (extendedType_.equals(SourceDocument.XT_RMARKDOWN))
+      {
+         // populate the popup menu with a list of available formats
          updateRmdFormatList();
+         setRMarkdownBehaviorEnabled(true);
+      }
       
       view_.addRmdFormatChangedHandler(new RmdOutputFormatChangedEvent.Handler()
       {
@@ -2035,6 +2050,20 @@ public class TextEditingTarget implements
       }
       commandHandlerReg_ = commandBinder.bind(commands_, this);
 
+      // show outline if not yet rendered (deferred so that widget itself can 
+      // be sized first)
+      if (!docDisplay_.isRendered())
+      {
+         Scheduler.get().scheduleDeferred(new ScheduledCommand()
+         {
+            @Override
+            public void execute()
+            {
+               view_.initWidgetSize();
+            }
+         });
+      }
+
       Scheduler.get().scheduleFinally(new ScheduledCommand()
       {
          public void execute()
@@ -2429,8 +2458,10 @@ public class TextEditingTarget implements
          return;
       }
       
+      
       if (prefs_.stripTrailingWhitespace().getValue() &&
-          !fileType_.isMarkdown())
+          !fileType_.isMarkdown() &&
+          !name_.getValue().equals("DESCRIPTION"))
       {
          String code = docDisplay_.getCode();
          Pattern pattern = Pattern.create("[ \t]+$");
@@ -2505,6 +2536,9 @@ public class TextEditingTarget implements
 
       if (notebook_ != null)
          notebook_.onDismiss();
+      
+      if (inlinePreviewer_ != null)
+         inlinePreviewer_.onDismiss();
    }
 
    public ReadOnlyValue<Boolean> dirtyState()
@@ -3113,7 +3147,8 @@ public class TextEditingTarget implements
                {
                   if (docs.get(i).getId() == getId())
                   {
-                     docs.get(i).setChunkDefs(docDisplay_.getChunkDefs());
+                     docs.get(i).getNotebookDoc().setChunkDefs(
+                           docDisplay_.getChunkDefs());
                      docs.get(i).setContents(docDisplay_.getCode());
                      docs.get(i).setDirty(dirtyState_.getValue());
                      break;
@@ -3179,6 +3214,13 @@ public class TextEditingTarget implements
          notebook_.onNotebookClearAllOutput();
    }
    
+   @Handler
+   public void onNotebookToggleExpansion()
+   {
+      if (notebook_ != null)
+         notebook_.onNotebookToggleExpansion();
+   }
+
    @Handler
    public void onRestartRRunAllChunks()
    {
@@ -3605,16 +3647,19 @@ public class TextEditingTarget implements
          view_.setIsShinyFormat(selTemplate.format != null,
                                 selTemplate.format != null &&
                                 selTemplate.format.endsWith(
-                                      RmdOutputFormat.OUTPUT_PRESENTATION_SUFFIX));
+                                      RmdOutputFormat.OUTPUT_PRESENTATION_SUFFIX),
+                                isShinyPrerenderedDoc());
       }
       // could be runtime: shiny with a custom format
       else if (isShinyDoc())
       {
          view_.setIsShinyFormat(false,  // no output options b/c no template
-                                false); // not a presentation (unknown format)
+                                false,  // not a presentation (unknown format)
+                                isShinyPrerenderedDoc()); 
       }
       else
       {
+         view_.setIsNotShinyFormat();
          if (selTemplate != null)
          {
             JsArray<RmdTemplateFormat> formats = selTemplate.template.getFormats();
@@ -4101,7 +4146,11 @@ public class TextEditingTarget implements
    @Handler
    void onInsertChunk()
    {
-      onInsertChunkR();
+      InsertChunkInfo info = docDisplay_.getInsertChunkInfo();
+      if (info == null)
+         return;
+      
+      onInsertChunk(info.getValue(), 1, 0);
    }
    
    @Handler
@@ -4359,7 +4408,8 @@ public class TextEditingTarget implements
       for (Scope scope : previousScopes)
       {
          if (isExecutableChunk(scope))
-            chunks.add(new ChunkExecUnit(scope));
+            chunks.add(
+                  new ChunkExecUnit(scope, NotebookQueueUnit.EXEC_MODE_BATCH));
       }
       
       if (!chunks.isEmpty())
@@ -4395,6 +4445,18 @@ public class TextEditingTarget implements
          executeSweaveChunk(setupScope, NotebookQueueUnit.EXEC_MODE_BATCH, 
                false);
       }
+   }
+   
+   public void renderLatex()
+   {
+      if (mathjax_ != null)
+         mathjax_.renderLatex();
+   }
+   
+   public void renderLatex(Range range, boolean background)
+   {
+      if (mathjax_ != null)
+         mathjax_.renderLatex(range, background);
    }
 
    public String getDefaultNamePrefix()
@@ -4455,18 +4517,20 @@ public class TextEditingTarget implements
             if (!range.isEmpty())
             {
                codeExecution_.setLastExecuted(range.getStart(), range.getEnd());
-               if (fileType_.isRmd() && 
-                   docDisplay_.showChunkOutputInline())
-               {
-                  notebook_.executeChunk(chunk);
-               }
-               else
-               {
-                  String code = scopeHelper_.getSweaveChunkText(chunk);
-                  events_.fireEvent(new SendToConsoleEvent(code, true));
-               }
-               docDisplay_.collapseSelection(true);   
             }
+            if (fileType_.isRmd() && 
+                docDisplay_.showChunkOutputInline())
+            {
+               // in notebook mode, an empty chunk can refer to external code,
+               // so always execute it 
+               notebook_.executeChunk(chunk);
+            }
+            else if (!range.isEmpty())
+            {
+               String code = scopeHelper_.getSweaveChunkText(chunk);
+               events_.fireEvent(new SendToConsoleEvent(code, true));
+            }
+            docDisplay_.collapseSelection(true);
          }
       };
       
@@ -4973,6 +5037,22 @@ public class TextEditingTarget implements
       }
    }
    
+   private boolean isShinyPrerenderedDoc()
+   {
+      try
+      {
+         String yaml = getRmdFrontMatter();
+         if (yaml == null)
+            return false;
+         return rmarkdownHelper_.isRuntimeShinyPrerendered(yaml); 
+      }
+      catch(Exception e)
+      {
+         Debug.log(e.getMessage());
+         return false;
+      }
+   }
+   
    private String getCustomKnit()
    {
       try
@@ -5264,7 +5344,7 @@ public class TextEditingTarget implements
                MessageDialog.QUESTION, 
                "Clear Knitr Cache", 
                "Clearing the Knitr cache will delete the cache " +
-               "directory for this document (\"" + docPath + "\"). " +
+               "directory for " + docPath + ". " +
                "\n\nAre you sure you want to clear the cache now?",
                false,
                new Operation() {
@@ -5287,6 +5367,44 @@ public class TextEditingTarget implements
      
    }
    
+   
+   @Handler
+   void onClearPrerenderedOutput()
+   {
+      withSavedDoc(new Command() {
+         @Override
+         public void execute()
+         {
+            // determine the output path (use relative path if possible)
+            String path = docUpdateSentinel_.getPath();
+            String relativePath = FileSystemItem.createFile(path).getPathRelativeTo(
+                workbenchContext_.getCurrentWorkingDir());
+            if (relativePath != null)
+               path = relativePath;
+            final String docPath = path;
+            
+            globalDisplay_.showYesNoMessage(
+               MessageDialog.QUESTION, 
+               "Clear Prerendered Output", 
+               "This will remove all previously generated output " +
+               "for " + docPath + " (html, prerendered data, knitr cache, etc.)." +
+               "\n\nAre you sure you want to clear the output now?",
+               false,
+               new Operation() {
+                  @Override
+                  public void execute()
+                  {
+                     String code = "rmarkdown::shiny_prerendered_clean(" + 
+                                   ConsoleDispatcher.escapedPath(docPath) + 
+                                   ")";
+                     events_.fireEvent(new SendToConsoleEvent(code, true));
+                  }
+               },
+               null,
+               true);  
+         }
+      });
+   }
    
    
    @Handler
@@ -6245,6 +6363,50 @@ public class TextEditingTarget implements
       return notebook_;
    }
    
+   private void setRMarkdownBehaviorEnabled(boolean enabled)
+   {
+      // register idle monitor; automatically creates/refreshes previews
+      // of images and LaTeX equations during idle
+      if (bgIdleMonitor_ == null && enabled)
+         bgIdleMonitor_ = new TextEditingTargetIdleMonitor(this, 
+               docUpdateSentinel_);
+      else if (bgIdleMonitor_ != null)
+      {
+         if (enabled)
+            bgIdleMonitor_.beginMonitoring();
+         else
+            bgIdleMonitor_.endMonitoring();
+      }
+      
+      // set up mathjax
+      if (mathjax_ == null && enabled)
+         mathjax_ = new MathJax(docDisplay_, docUpdateSentinel_, prefs_);
+
+      if (enabled)
+      {
+         // auto preview images and equations
+         if (inlinePreviewer_ == null)
+            inlinePreviewer_ = new InlinePreviewer(
+                  this, docUpdateSentinel_, prefs_);
+         inlinePreviewer_.preview();
+
+         // sync the notebook's output mode (enable/disable inline output)
+         if (notebook_ != null)
+            notebook_.syncOutputMode();
+      }
+      else
+      {
+         // clean up previewers
+         if (inlinePreviewer_ != null)
+            inlinePreviewer_.onDismiss();
+
+         // clean up line widgets
+         if (notebook_ != null)
+            notebook_.onNotebookClearAllOutput();
+         docDisplay_.removeAllLineWidgets();
+      }
+   }
+   
    private StatusBar statusBar_;
    private final DocDisplay docDisplay_;
    private final UIPrefs prefs_;
@@ -6278,6 +6440,7 @@ public class TextEditingTarget implements
    private final TextEditingTargetCppHelper cppHelper_;
    private final TextEditingTargetPresentationHelper presentationHelper_;
    private final TextEditingTargetReformatHelper reformatHelper_;
+   private TextEditingTargetIdleMonitor bgIdleMonitor_;
    private TextEditingTargetThemeHelper themeHelper_;
    private RoxygenHelper roxygenHelper_;
    private boolean ignoreDeletes_;
@@ -6290,6 +6453,8 @@ public class TextEditingTarget implements
    private final LintManager lintManager_;
    private final TextEditingTargetRenameHelper renameHelper_;
    private CollabEditStartParams queuedCollabParams_;
+   private MathJax mathjax_;
+   private InlinePreviewer inlinePreviewer_;
    
    // Allows external edit checks to supercede one another
    private final Invalidation externalEditCheckInvalidation_ =

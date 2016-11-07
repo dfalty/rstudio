@@ -18,6 +18,7 @@ import org.rstudio.core.client.Rectangle;
 import org.rstudio.core.client.theme.res.ThemeStyles;
 import org.rstudio.studio.client.RStudioGinjector;
 import org.rstudio.studio.client.rmarkdown.model.RmdChunkOptions;
+import org.rstudio.studio.client.workbench.views.source.editors.text.ChunkOutputSize;
 import org.rstudio.studio.client.workbench.views.source.editors.text.ChunkOutputWidget;
 import org.rstudio.studio.client.workbench.views.source.editors.text.DocDisplay;
 import org.rstudio.studio.client.workbench.views.source.editors.text.PinnedLineWidget;
@@ -54,8 +55,9 @@ public class ChunkOutputUi
       boolean hasOutput = widget != null;
       if (widget == null) 
       {
-         widget = new ChunkOutputWidget(docId_, def.getChunkId(), def.getOptions(), 
-                                        def.getExpansionState(), this);
+         widget = new ChunkOutputWidget(docId_, def.getChunkId(), 
+               def.getOptions(), def.getExpansionState(), true, this, 
+               ChunkOutputSize.Default);
       }
       else
       {
@@ -226,7 +228,7 @@ public class ChunkOutputUi
    public void onOutputRemoved(ChunkOutputWidget widget)
    {
       RStudioGinjector.INSTANCE.getEventBus().fireEvent(
-              new ChunkChangeEvent(docId_, chunkId_, 0, 
+              new ChunkChangeEvent(docId_, chunkId_, "", 0, 
                                    ChunkChangeEvent.CHANGE_REMOVE));
    }
 
@@ -261,7 +263,8 @@ public class ChunkOutputUi
    public final static int CHUNK_COLLAPSED_HEIGHT = 15;
    public final static int MAX_CHUNK_HEIGHT = 650;
    
-   public final static int MAX_PLOT_WIDTH = 650;
+   public final static int MIN_PLOT_WIDTH = 400;
+   public final static int MAX_PLOT_WIDTH = 700;
    public final static int MAX_HTMLWIDGET_WIDTH = 800;
    
    public final static double OUTPUT_ASPECT = 1.618;

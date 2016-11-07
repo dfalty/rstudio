@@ -1,5 +1,5 @@
 /*
- * AceEditorIdleMonitor.java
+ * TextEditingTargetIdleMonitor.java
  *
  * Copyright (C) 2009-16 by RStudio, Inc.
  *
@@ -12,7 +12,7 @@
  * AGPL (http://www.gnu.org/licenses/agpl-3.0.txt) for more details.
  *
  */
-package org.rstudio.studio.client.workbench.views.source.editors.text.ace;
+package org.rstudio.studio.client.workbench.views.source.editors.text;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -24,10 +24,10 @@ import org.rstudio.core.client.container.SafeMap;
 import org.rstudio.core.client.dom.DomUtils;
 import org.rstudio.studio.client.RStudioGinjector;
 import org.rstudio.studio.client.common.filetypes.TextFileType;
-import org.rstudio.studio.client.workbench.views.source.editors.text.AceEditor;
 import org.rstudio.studio.client.workbench.views.source.editors.text.events.CursorChangedEvent;
 import org.rstudio.studio.client.workbench.views.source.editors.text.events.CursorChangedHandler;
 import org.rstudio.studio.client.workbench.views.source.editors.text.events.EditorModeChangedEvent;
+import org.rstudio.studio.client.workbench.views.source.model.DocUpdateSentinel;
 
 import com.google.gwt.core.client.Scheduler;
 import com.google.gwt.core.client.Scheduler.ScheduledCommand;
@@ -41,11 +41,12 @@ import com.google.gwt.user.client.Event.NativePreviewHandler;
 import com.google.gwt.user.client.Timer;
 import com.google.inject.Inject;
 
-public class AceEditorIdleMonitor
+public class TextEditingTargetIdleMonitor
 {
    interface IdleCommand
    {
-      public void execute(AceEditor editor, IdleState state);
+      public void execute(TextEditingTarget target, DocUpdateSentinel sentinal, 
+            IdleState state);
    }
    
    @Inject
@@ -54,23 +55,27 @@ public class AceEditorIdleMonitor
       idleCommands_ = idleCommands;
    }
    
-   public AceEditorIdleMonitor(AceEditor editor)
+   public TextEditingTargetIdleMonitor(final TextEditingTarget editingTarget, 
+         DocUpdateSentinel sentinel)
    {
       RStudioGinjector.INSTANCE.injectMembers(this);
+      IdleTarget target = new IdleTarget(editingTarget, sentinel);
       
-      editor_ = editor;
+      display_ = editingTarget.getDocDisplay();
+      sentinel_ = sentinel;
       monitors_ = new ArrayList<HandlerRegistration>();
-      commands_ = new HashMap<HandlerRegistration, IdleCommand>();
+      commands_ = target.commands;
       timer_ = new Timer()
       {
          @Override
          public void run()
          {
-            executeIdleCommands(editor_, IdleState.STATE_CURSOR_IDLE);
+            executeIdleCommands(editingTarget, sentinel_, 
+                  IdleState.STATE_CURSOR_IDLE);
          }
       };
       
-      COMMAND_MAP.put(editor, commands_);
+      TARGET_MAP.put(editingTarget.getDocDisplay(), target);
       
       refreshCommands();
       beginMonitoring();
@@ -92,21 +97,27 @@ public class AceEditorIdleMonitor
    
    // Private Methods ----
    
-   private static void executeIdleCommands(AceEditor editor, int type)
+   private static void executeIdleCommands(TextEditingTarget editingTarget, 
+         DocUpdateSentinel sentinel, int type)
    {
       IdleState state = new IdleState(type, mouseX_, mouseY_, modifiers_);
-      Map<HandlerRegistration, IdleCommand> commandMap = COMMAND_MAP.get(editor);
-      for (Map.Entry<HandlerRegistration, IdleCommand> entry : commandMap.entrySet())
+      IdleTarget target = TARGET_MAP.get(editingTarget.getDocDisplay());
+      if (target == null)
+         return;
+      
+      for (Map.Entry<HandlerRegistration, IdleCommand> entry : 
+               target.commands.entrySet())
       {
          IdleCommand command = entry.getValue();
-         command.execute(editor, state);
+         command.execute(target.target, sentinel, state);
       }
    }
    
-   private void beginMonitoring()
+   public void beginMonitoring()
    {
       endMonitoring();
-      monitors_.add(editor_.addEditorModeChangedHandler(new EditorModeChangedEvent.Handler()
+      monitors_.add(display_.addEditorModeChangedHandler(
+            new EditorModeChangedEvent.Handler()
       {
          @Override
          public void onEditorModeChanged(EditorModeChangedEvent event)
@@ -122,7 +133,7 @@ public class AceEditorIdleMonitor
          }
       }));
       
-      monitors_.add(editor_.addCursorChangedHandler(new CursorChangedHandler()
+      monitors_.add(display_.addCursorChangedHandler(new CursorChangedHandler()
       {
          @Override
          public void onCursorChanged(CursorChangedEvent event)
@@ -132,7 +143,7 @@ public class AceEditorIdleMonitor
          }
       }));
       
-      monitors_.add(editor_.addAttachHandler(new AttachEvent.Handler()
+      monitors_.add(display_.addAttachHandler(new AttachEvent.Handler()
       {
          @Override
          public void onAttachOrDetach(AttachEvent event)
@@ -143,7 +154,7 @@ public class AceEditorIdleMonitor
       }));
    }
    
-   private void endMonitoring()
+   public void endMonitoring()
    {
       for (HandlerRegistration monitor : monitors_)
          monitor.removeHandler();
@@ -153,16 +164,18 @@ public class AceEditorIdleMonitor
    private void onDetach()
    {
       endMonitoring();
-      COMMAND_MAP.remove(editor_);
+      TARGET_MAP.remove(display_);
       commands_.clear();
+      timer_.cancel();
    }
    
    private void refreshCommands()
    {
       commands_.clear();
+      timer_.cancel();
       
       // attach commands based on file type
-      TextFileType fileType = editor_.getFileType();
+      TextFileType fileType = display_.getFileType();
       if (fileType == null)
          return;
       
@@ -197,7 +210,8 @@ public class AceEditorIdleMonitor
       private final int modifiers_;
    }
    
-   private final AceEditor editor_;
+   private final DocDisplay display_;
+   private final DocUpdateSentinel sentinel_;
    private final List<HandlerRegistration> monitors_;
    private final Map<HandlerRegistration, IdleCommand> commands_;
    private final Timer timer_;
@@ -208,9 +222,25 @@ public class AceEditorIdleMonitor
    private static int mouseY_;
    
    private static final Timer MOUSE_MOVE_TIMER;
-   @SuppressWarnings("unused") private static final HandlerRegistration MOUSE_MOVE_HANDLER;
-   private static final SafeMap<AceEditor, Map<HandlerRegistration, IdleCommand>> COMMAND_MAP;
    
+   private static final SafeMap<DocDisplay, IdleTarget> TARGET_MAP;
+   
+   private class IdleTarget
+   {
+      public IdleTarget(TextEditingTarget t, DocUpdateSentinel s)
+      {
+         target = t;
+         sentinel = s;
+         commands = new HashMap<HandlerRegistration, IdleCommand>();
+      }
+      public final TextEditingTarget target;
+      public final DocUpdateSentinel sentinel;
+      public final Map<HandlerRegistration, IdleCommand> commands;
+   }
+
+   @SuppressWarnings("unused") 
+   private static final HandlerRegistration MOUSE_MOVE_HANDLER;
+
    static {
       MOUSE_MOVE_TIMER = new Timer()
       {
@@ -225,7 +255,10 @@ public class AceEditorIdleMonitor
             if (editor == null)
                return;
             
-            executeIdleCommands(editor, IdleState.STATE_MOUSE_IDLE);
+            IdleTarget target = TARGET_MAP.get(editor);
+            if (target != null)
+               executeIdleCommands(target.target, target.sentinel, 
+                     IdleState.STATE_MOUSE_IDLE);
          }
       };
       
@@ -245,8 +278,8 @@ public class AceEditorIdleMonitor
             MOUSE_MOVE_TIMER.schedule(DELAY_MS);
          }
       });
-      
-      COMMAND_MAP = new SafeMap<AceEditor, Map<HandlerRegistration, IdleCommand>>();
+
+       TARGET_MAP = new SafeMap<DocDisplay, IdleTarget>();
    }
    
    private static final int DELAY_MS = 700;

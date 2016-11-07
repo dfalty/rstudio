@@ -141,7 +141,10 @@ assign(x = ".rs.acCompletionTypes",
       "@importFrom ",
       "@importMethodsFrom ",
       "@include ",
+      "@inherit ",
+      "@inheritDotParams ",
       "@inheritParams ",
+      "@inheritSection ",
       "@keywords ",
       "@method ",
       "@name ",
@@ -231,9 +234,8 @@ assign(x = ".rs.acCompletionTypes",
       if (!identical(tokenSlashIndices, -1L))
       {
          maxIndex <- max(tokenSlashIndices)
-         directory <- suppressWarnings(
-            .rs.normalizePath(file.path(path, substring(token, 1, maxIndex - 1)))
-         )
+         fullPath <- file.path(path, substring(token, 1, maxIndex - 1))
+         directory <- suppressWarnings(.rs.normalizePath(fullPath, winslash = "/"))
       }
       else
       {
@@ -244,7 +246,7 @@ assign(x = ".rs.acCompletionTypes",
    # If we're trying to get completions from a directory that doesn't
    # exist, give up
    if (!file.exists(directory))
-      return(.rs.emptyCompletions())
+      return(.rs.emptyCompletions(excludeOtherCompletions = TRUE))
    
    # When checking if the path lies within the project directory,
    # we just do a substring check -- so make sure that the path
@@ -279,7 +281,7 @@ assign(x = ".rs.acCompletionTypes",
    
    ## Bail out early if we didn't get any completions.
    if (!length(absolutePaths))
-      return(.rs.emptyCompletions())
+      return(.rs.emptyCompletions(excludeOtherCompletions = TRUE))
    
    ## Because the completions returned will replace the whole token,
    ## we need to be careful in how we construct the return result. In particular,
@@ -854,7 +856,8 @@ assign(x = ".rs.acCompletionTypes",
                                             excludeOtherCompletions = FALSE,
                                             overrideInsertParens = FALSE,
                                             orderStartsWithAlnumFirst = TRUE,
-                                            cacheable = TRUE)
+                                            cacheable = TRUE,
+                                            helpHandler = NULL)
 {
    if (is.null(results))
       results <- character()
@@ -901,7 +904,8 @@ assign(x = ".rs.acCompletionTypes",
         fguess = fguess,
         excludeOtherCompletions = .rs.scalar(excludeOtherCompletions),
         overrideInsertParens = .rs.scalar(overrideInsertParens),
-        cacheable = .rs.scalar(cacheable))
+        cacheable = .rs.scalar(cacheable),
+        helpHandler = .rs.scalar(helpHandler))
 })
 
 .rs.addFunction("subsetCompletions", function(completions, indices)
@@ -942,6 +946,9 @@ assign(x = ".rs.acCompletionTypes",
    # If one completion states we are not cacheable, that setting is 'sticky'
    if (length(new$cacheable) && !new$cacheable)
       old$cacheable <- new$cacheable
+   
+   if (length(new$helpHandler))
+      old$helpHandler <- new$helpHandler
    
    old
 })
@@ -1028,6 +1035,7 @@ assign(x = ".rs.acCompletionTypes",
       allNames <- character()
       names <- character()
       type <- numeric()
+      helpHandler <- NULL
       
       if (isAt)
       {
@@ -1064,6 +1072,9 @@ assign(x = ".rs.acCompletionTypes",
          if (is.function(dollarNamesMethod))
          {
             allNames <- dollarNamesMethod(object)
+            
+            # check for custom helpHandler
+            helpHandler <- attr(allNames, "helpHandler", exact = TRUE)
          }
          
          # Reference class generators / objects
@@ -1164,7 +1175,8 @@ assign(x = ".rs.acCompletionTypes",
          packages = string,
          quote = FALSE,
          type = type,
-         excludeOtherCompletions = TRUE
+         excludeOtherCompletions = TRUE,
+         helpHandler = helpHandler
       )
    }
    
@@ -1447,10 +1459,17 @@ assign(x = ".rs.acCompletionTypes",
    # Keywords are really from the base package
    packages[packages == "keywords"] <- "base"
    
+   # discover completion matches for this token
    keep <- .rs.fuzzyMatches(results, token)
    results <- results[keep]
    packages <- packages[keep]
    
+   # remove duplicates (assume first element masks next)
+   dupes    <- duplicated(results)
+   results  <- results[!dupes]
+   packages <- packages[!dupes]
+   
+   # re-order the completion results (lexically)
    order <- order(results)
    
    # If the token is 'T' or 'F', prefer 'TRUE' and 'FALSE' completions
@@ -1766,6 +1785,29 @@ assign(x = ".rs.acCompletionTypes",
    )
    
    ## Handle some special cases early
+   
+   # custom help handler for arguments
+   if (.rs.acContextTypes$FUNCTION %in% type) {
+      scope <- string[[1]]
+      custom <- .rs.findCustomHelpContext(scope, "help_formals_handler")
+      if (!is.null(custom)) {
+         formals <- custom$handler(custom$topic, custom$source)
+         if (!is.null(formals)) {
+            results <- paste(formals$formals, "= ")
+            results <- .rs.selectFuzzyMatches(results, token)
+            return(.rs.makeCompletions(
+               token = token,
+               results = results,
+               packages = scope,
+               type = .rs.acCompletionTypes$ARGUMENT,
+               excludeOtherCompletions = TRUE,
+               helpHandler = formals$helpHandler)
+            )
+         } else {
+            return (.rs.emptyCompletions(excludeOtherCompletions = TRUE))
+         }
+      }
+   }
    
    # help
    if (.rs.acContextTypes$HELP %in% type)

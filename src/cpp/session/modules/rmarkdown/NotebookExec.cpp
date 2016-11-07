@@ -120,12 +120,20 @@ void ChunkExecContext::connect()
    connections_.push_back(events().onCondition.connect(
          boost::bind(&ChunkExecContext::onCondition, this, _1, _2)));
 
-   // extract knitr figure options if present (currently supported at the 
-   // chunk level only)
-   double figWidth = 0;
-   double figHeight = 0;
-   json::readObject(options_.chunkOptions(), "fig.width",  &figWidth);
-   json::readObject(options_.chunkOptions(), "fig.height", &figHeight);
+   // extract knitr figure options if present
+   double figWidth = options_.getOverlayOption("fig.width", 0.0);
+   double figHeight = options_.getOverlayOption("fig.height", 0.0);
+   
+   // if 'fig.asp' is set, then use that to override 'fig.height'
+   double figAsp = options_.getOverlayOption("fig.asp", 0.0);
+   if (figAsp != 0.0)
+   {
+      // if figWidth is unset, default to 7.0
+      if (figWidth == 0.0)
+         figWidth = 7.0;
+      
+      figHeight = figWidth * figAsp;
+   }
 
    // begin capturing plots 
    connections_.push_back(events().onPlotOutput.connect(
@@ -221,7 +229,7 @@ void ChunkExecContext::connect()
 
    error = pDataCapture->connectDataCapture(
             outputPath_,
-            options_.chunkOptions());
+            options_.mergedOptions());
    if (error)
       LOG_ERROR(error);
 

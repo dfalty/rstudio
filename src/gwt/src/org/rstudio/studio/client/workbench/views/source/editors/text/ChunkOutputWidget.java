@@ -14,11 +14,13 @@
  */
 package org.rstudio.studio.client.workbench.views.source.editors.text;
 
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 import org.rstudio.core.client.ColorUtil;
+import org.rstudio.core.client.CommandWithArg;
 import org.rstudio.core.client.Size;
-import org.rstudio.core.client.StringUtil;
 import org.rstudio.core.client.dom.DomUtils;
 import org.rstudio.core.client.widget.ProgressSpinner;
 import org.rstudio.studio.client.RStudioGinjector;
@@ -105,22 +107,13 @@ public class ChunkOutputWidget extends Composite
       String spinner();
       String pendingResize();
       String fullsize();
+      String baresize();
+      String noclear();
    }
 
-   public ChunkOutputWidget(String documentId, String chunkId, RmdChunkOptions options, 
-         int expansionState, ChunkOutputHost host)
-   {
-      this(
-         documentId,
-         chunkId,
-         options, 
-         expansionState, 
-         host,
-         ChunkOutputSize.Default);
-   }
-
-   public ChunkOutputWidget(String documentId, String chunkId, RmdChunkOptions options, 
-         int expansionState, ChunkOutputHost host, ChunkOutputSize chunkOutputSize)
+   public ChunkOutputWidget(String documentId, String chunkId, 
+         RmdChunkOptions options, int expansionState, boolean canClose, 
+         ChunkOutputHost host, ChunkOutputSize chunkOutputSize)
    {
       documentId_ = documentId;
       chunkId_ = chunkId;
@@ -146,6 +139,12 @@ public class ChunkOutputWidget extends Composite
       {
          addStyleName(style.fullsize());
       }
+      else if (chunkOutputSize_ == ChunkOutputSize.Bare)
+      {
+         addStyleName(style.baresize());
+      }
+      if (!canClose)
+         addStyleName(style.noclear());
 
       // create the initial output stream and attach it to the frame
       attachPresenter(new ChunkOutputStream(this, chunkOutputSize_));
@@ -216,17 +215,21 @@ public class ChunkOutputWidget extends Composite
       return expansionState_.getValue();
    }
    
-   public boolean needsHeightSync()
-   {
-      return needsHeightSync_;
-   }
-   
    public void setExpansionState(int state)
    {
+      setExpansionState(state, null);
+   }
+   
+   public void setExpansionState(int state, CommandWithArg<Boolean> onTransitionCompleted)
+   {
       if (state == expansionState_.getValue())
+      {
+         if (onTransitionCompleted != null)
+            onTransitionCompleted.execute(false);
          return;
-      else
-         toggleExpansionState(false);
+      }
+      
+      toggleExpansionState(false, onTransitionCompleted);
    }
    
    public int getState()
@@ -309,26 +312,9 @@ public class ChunkOutputWidget extends Composite
       // don't sync if not visible and no output yet
       if (!isVisible() && (state_ == CHUNK_EMPTY || state_ == CHUNK_PRE_OUTPUT))
          return;
-      
-      // don't sync if Ace hasn't positioned us yet
-      if (StringUtil.isNullOrEmpty(getElement().getStyle().getTop()))
-      {
-         needsHeightSync_ = true;
-         return;
-      }
 
       setVisible(true);
       
-      if (root_.getElement().getScrollHeight() == 0 && presenter_.hasOutput())
-      {
-         // if we have no height but we do have content, mark ourselves as 
-         // requiring a sync
-         needsHeightSync_ = true;
-      }
-      else
-      {
-         needsHeightSync_ = false;
-      }
       // clamp chunk height to min/max (the +19 is the sum of the vertical
       // padding on the element)
       int height = ChunkOutputUi.CHUNK_COLLAPSED_HEIGHT;
@@ -411,8 +397,16 @@ public class ChunkOutputWidget extends Composite
       // clean error state
       hasErrors_ = false;
 
+      // if we already had output, clear it
+      if (state_ == CHUNK_READY)
+      {
+         presenter_.clearOutput();
+         attachPresenter(new ChunkOutputStream(this, chunkOutputSize_));
+      }
+
       registerConsoleEvents();
       state_ = CHUNK_PRE_OUTPUT;
+
       execScope_ = scope;
       showBusyState();
    }
@@ -699,7 +693,11 @@ public class ChunkOutputWidget extends Composite
 
    private void showReadyState()
    {
-      getElement().getStyle().setBackgroundColor(s_colors.background);
+      if (getElement() != null && getElement().getStyle() != null && s_colors != null)
+      {
+         getElement().getStyle().setBackgroundColor(s_colors.background);
+      }
+
       if (spinner_ != null)
       {
          spinner_.removeFromParent();
@@ -758,6 +756,12 @@ public class ChunkOutputWidget extends Composite
    
    private void toggleExpansionState(final boolean ensureVisible)
    {
+      toggleExpansionState(ensureVisible, null);
+   }
+   
+   private void toggleExpansionState(final boolean ensureVisible,
+                                     final CommandWithArg<Boolean> onTransitionCompleted)
+   {
       // don't permit toggling state while we're animating a new state
       // (no simple way to gracefully reverse direction) 
       if (collapseTimer_ != null && collapseTimer_.isRunning())
@@ -774,9 +778,10 @@ public class ChunkOutputWidget extends Composite
             @Override
             public void run()
             {
-               renderedHeight_ = 
-                     ChunkOutputUi.CHUNK_COLLAPSED_HEIGHT;
+               renderedHeight_ = ChunkOutputUi.CHUNK_COLLAPSED_HEIGHT;
                host_.onOutputHeightChanged(ChunkOutputWidget.this, renderedHeight_, ensureVisible);
+               if (onTransitionCompleted != null)
+                  onTransitionCompleted.execute(true);
             }
             
          };
@@ -794,6 +799,8 @@ public class ChunkOutputWidget extends Composite
             {
                syncHeight(true, ensureVisible);
                frame_.getElement().getStyle().clearProperty("transition");
+               if (onTransitionCompleted != null)
+                  onTransitionCompleted.execute(true);
             }
          };
       }
@@ -828,13 +835,6 @@ public class ChunkOutputWidget extends Composite
    {
       if (state_ == CHUNK_PRE_OUTPUT)
       {
-         // if no output has been emitted yet, clean up all existing output
-         presenter_.clearOutput();
-
-         // start with the stream presenter (we'll switch to gallery later if
-         // circumstances demand)
-         attachPresenter(new ChunkOutputStream(this, chunkOutputSize_));
-
          hasErrors_ = false;
          state_ = CHUNK_POST_OUTPUT;
       }
@@ -854,11 +854,23 @@ public class ChunkOutputWidget extends Composite
          
          // extract all the pages from the stream and populate the gallery
          List<ChunkOutputPage> pages = stream.extractPages();
-         if (stream.hasContent())
+         int ordinal = stream.getContentOrdinal();
+         if (ordinal > 0)
          {
             // add the stream itself if there's still anything left in it
-            gallery.addPage(new ChunkConsolePage(stream, chunkOutputSize_));
+            pages.add(new ChunkConsolePage(ordinal, stream, chunkOutputSize_));
          }
+         
+         // ensure page ordering is correct
+         Collections.sort(pages, new Comparator<ChunkOutputPage>()
+         {
+            @Override
+            public int compare(ChunkOutputPage o1, ChunkOutputPage o2)
+            {
+               return o1.ordinal() - o2.ordinal();
+            }
+         });
+         
          for (ChunkOutputPage page: pages)
          {
             gallery.addPage(page);
@@ -907,7 +919,6 @@ public class ChunkOutputWidget extends Composite
    private int pendingRenders_ = 0;
    private int lastOutputType_ = RmdChunkOutputUnit.TYPE_NONE;
    private boolean hasErrors_ = false;
-   private boolean needsHeightSync_ = false;
    private boolean hideSatellitePopup_ = false;
    
    private Timer collapseTimer_ = null;

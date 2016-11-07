@@ -144,6 +144,13 @@ Error NotebookQueueUnit::fromJson(const json::Object& source,
 
 Error NotebookQueueUnit::parseOptions(json::Object* pOptions)
 {
+   // inline chunks have no options
+   if (execScope_ == ExecScopeInline)
+   {
+      *pOptions = json::Object();
+      return Success();
+   }
+
    // evaluate this chunk's options in R
    r::sexp::Protect protect;
    SEXP sexpOptions = R_NilValue;
@@ -237,6 +244,13 @@ std::string NotebookQueueUnit::popExecRange(ExecRange* pRange,
    if (pending_.empty())
       return "";
 
+   // inline chunks always execute all their code at once
+   if (execScope_ == ExecScopeInline)
+   {
+      pending_.clear();
+      return string_utils::wideToUtf8(code_);
+   }
+
    // extract next range to execute
    ExecRange& range = *pending_.begin();
    int start = range.start;
@@ -307,6 +321,16 @@ std::string NotebookQueueUnit::executingCode() const
 {
    return string_utils::wideToUtf8(code_.substr(
             executing_.start, executing_.stop - executing_.start));
+}
+
+void NotebookQueueUnit::replaceCode(const std::string& code)
+{
+   // replace the entire body of the code
+   code_ = string_utils::utf8ToWide(code);
+
+   // replace the pending queue with one that executes exactly the code given
+   pending_.clear();
+   pending_.push_back(ExecRange(0, code_.length()));
 }
 
 } // namespace notebook

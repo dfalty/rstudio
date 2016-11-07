@@ -114,6 +114,9 @@ var MarkdownHighlightRules = function() {
         "basic" : [{
             token : "constant.language.escape",
             regex : /\\[\\`*_{}\[\]()#+\-.!]/
+        }, { // inline r code
+            token : "support.function.inline_r_chunk",
+            regex : "`r (?:.*?[^`])`"
         }, { // code span `
             token : ["support.function", "support.function", "support.function"],
             regex : "(`+)(.*?[^`])(\\1)"
@@ -131,25 +134,28 @@ var MarkdownHighlightRules = function() {
                 '((?:[^\\)\\s\\\\]|\\\\.|\\s(?=[^"]))*)' +        // href
                 '(\\s*"' +  escaped('"') + '"\\s*)?' +            // "title"
                 "(\\))"                                           // )
-        },
-            strongStars,
-            strongUnderscore,
-            emphasisStars,
-            emphasisUnderscore,
-        {
+        }, {
             token : ["text", "keyword", "text"],
             regex : "(<)("+
                 "(?:https?|ftp|dict):[^'\">\\s]+"+
                 "|"+
                 "(?:mailto:)?[-.\\w]+\\@[-a-z0-9]+(?:\\.[-a-z0-9]+)*\\.[a-z]+"+
                 ")(>)"
-        }],
+        },
+            strongStars,
+            strongUnderscore,
+            emphasisStars,
+            emphasisUnderscore
+        ],
        
         start: [{
            token : "empty_line",
            regex : '^$',
            next: "allowBlock"
-        }, { // code span
+        }, { // inline r code
+            token : "support.function.inline_r_chunk",
+            regex : "`r (?:.*?[^`])`"
+        }, { // code span `
             token : ["support.function", "support.function", "support.function"],
             regex : "(`+)([^\\r]*?[^`])(\\1)"
         }, { // h1 with equals
@@ -208,29 +214,24 @@ var MarkdownHighlightRules = function() {
             token : "constant",
             regex : "^[ ]{0,2}(?:[ ]?\\_[ ]?){3,}\\s*$"
         }, { // MathJax native display \[ ... \]
-            token : "latex.markup.list.begin",
+            token : "latex.markup.list.string.begin",
             regex : "\\\\\\[",
             next  : "mathjaxnativedisplay"
         }, { // MathJax native inline \( ... \)
-            token : "latex.markup.list.begin",
+            token : "latex.markup.list.string.begin",
             regex : "\\\\\\(",
             next  : "mathjaxnativeinline"
         }, { // $ escape
             token : "text",
             regex : "\\\\\\$"
         }, { // MathJax $$
-            token : "latex.markup.list.begin",
+            token : "latex.markup.list.string.begin",
             regex : "\\${2}",
             next  : "mathjaxdisplay"
         }, { // MathJax $...$ (org-mode style)
-            token : ["latex.markup.list.begin","latex.support.function","latex.markup.list.end"],
+            token : ["latex.markup.list.string.begin","latex.support.function","latex.markup.list.string.end"],
             regex : "(\\$)((?:(?:\\\\.)|(?:[^\\$\\\\]))*?)(\\$)"
-        },
-            strongStars,
-            strongUnderscore,
-            emphasisStars,
-            emphasisUnderscore,
-        { // simple links <url>
+        }, { // simple links <url>
             token : ["text", "keyword", "text"],
             regex : "(<)("+
                 "(?:https?|ftp|dict):[^'\">\\s]+"+
@@ -240,18 +241,18 @@ var MarkdownHighlightRules = function() {
         }, {
             // embedded latex command
             token : "keyword",
-            regex : "\\\\(?:[a-zA-z0-9]+|[^a-zA-z0-9])"
+            regex : "\\\\(?:[a-zA-Z0-9]+|[^a-zA-Z0-9])"
         }, {
-            // embedded latex arg
-            token : ["paren.keyword.operator", "text", "paren.keyword.operator"],
-            regex : "(\\{)([^\\}]*)(\\})"
+            // brackets
+            token : "paren.keyword.operator",
+            regex : "[{}]"
         }, {
             // pandoc citation
             token : "markup.list",
             regex : "-?\\@[\\w\\d-]+"
         }, {
             token : "text",
-            regex : "[^\\*_%$`\\[#<>\\\\@\\s]+"
+            regex : "[^\\*_%$`\\[#<>{}\\\\@\\s]+"
         }, {
             token : "text",
             regex : "\\\\"
@@ -261,9 +262,14 @@ var MarkdownHighlightRules = function() {
             next: "allowBlock"
         }, { // list
             token : "text",
-            regex : "^\\s{0,3}(?:[*+-]|\\d+\\.)\\s+",
+            regex : "^\\s*(?:[*+-]|\\d+\\.)\\s+",
             next  : "listblock"
-        }, { // html comment
+        },
+            strongStars,
+            strongUnderscore,
+            emphasisStars,
+            emphasisUnderscore,
+        { // html comment
             token : "comment",
             regex : "<\\!--",
             next  : "html-comment"
@@ -362,11 +368,11 @@ var MarkdownHighlightRules = function() {
             next  : "fieldblock"
         }, {
             token : "text",
-            regex : ".+"
+            regex : "[^{}]+"
         }],
 
         "mathjaxdisplay" : [{
-            token : "latex.markup.list.end",
+            token : "latex.markup.list.string.end",
             regex : "\\${2}",
             next  : "start"
         }, {
@@ -375,7 +381,7 @@ var MarkdownHighlightRules = function() {
         }],
         
         "mathjaxnativedisplay" : [{
-            token : "latex.markup.list.end",
+            token : "latex.markup.list.string.end",
             regex : "\\\\\\]",
             next  : "start"
         }, {
@@ -384,7 +390,7 @@ var MarkdownHighlightRules = function() {
         }],
         
         "mathjaxnativeinline" : [{
-            token : "latex.markup.list.end",
+            token : "latex.markup.list.string.end",
             regex : "\\\\\\)",
             next  : "start"
         }, {

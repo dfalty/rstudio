@@ -102,6 +102,7 @@ public class ChunkSatelliteWindow extends SatelliteWindow
          chunkWindowParams_.getChunkId(),
          RmdChunkOptions.create(),
          ChunkOutputWidget.EXPANDED,
+         false,  // can close
          chunkOutputHost,
          ChunkOutputSize.Full);
 
@@ -155,6 +156,11 @@ public class ChunkSatelliteWindow extends SatelliteWindow
    @Override
    public void onChunkSatelliteCodeExecuting(ChunkSatelliteCodeExecutingEvent event)
    {
+      String docId = chunkWindowParams_.getDocId();
+      
+      if (event.getDocId() != docId)
+         return;
+
       chunkOutputWidget_.setCodeExecuting(
          event.getMode(),
          event.getScope());
@@ -163,6 +169,11 @@ public class ChunkSatelliteWindow extends SatelliteWindow
    @Override
    public void onChunkSatelliteCacheEditorStyle(ChunkSatelliteCacheEditorStyleEvent event)
    {
+      String docId = chunkWindowParams_.getDocId();
+      
+      if (event.getDocId() != docId)
+         return;
+
       ChunkOutputWidget.cacheEditorStyle(
          event.getForegroundColor(),
          event.getBackgroundColor(),
@@ -243,14 +254,14 @@ public class ChunkSatelliteWindow extends SatelliteWindow
 
       if (event.getData().getChunkId() != chunkWindowParams_.getChunkId())
          return;
+
+      resizePlotsRemote_.schedule(10);
       
       RmdChunkOutputFinishedEvent.Data data = event.getData();
 
       chunkOutputWidget_.onOutputFinished(
          false,
          data.getScope());
-
-      resizePlotsRemote_.schedule(1);
    }
 
    @Override
@@ -283,7 +294,7 @@ public class ChunkSatelliteWindow extends SatelliteWindow
          // avoid reentrancy
          if (currentPlotsReplayId_ != null)
             return;
-         
+
          server_.replayNotebookChunkPlots(
             chunkWindowParams_.getDocId(), 
             chunkWindowParams_.getChunkId(),

@@ -67,7 +67,6 @@ import org.rstudio.studio.client.common.codetools.CodeToolsServerOperations;
 import org.rstudio.studio.client.common.debugging.model.Breakpoint;
 import org.rstudio.studio.client.common.filetypes.DocumentMode;
 import org.rstudio.studio.client.common.filetypes.TextFileType;
-import org.rstudio.studio.client.common.mathjax.MathJax;
 import org.rstudio.studio.client.server.Void;
 import org.rstudio.studio.client.workbench.MainWindowObject;
 import org.rstudio.studio.client.workbench.commands.Commands;
@@ -299,9 +298,7 @@ public class AceEditor implements DocDisplay,
       
       backgroundTokenizer_ = new BackgroundTokenizer(this);
       vim_ = new Vim(this);
-      mathjax_ = new MathJax(this);
       bgLinkHighlighter_ = new AceEditorBackgroundLinkHighlighter(this);
-      bgIdleMonitor_ = new AceEditorIdleMonitor(this);
       
       widget_.addValueChangeHandler(new ValueChangeHandler<Void>()
       {
@@ -2643,6 +2640,7 @@ public class AceEditor implements DocDisplay,
       // However, we do need to resize the gutter
       widget_.getEditor().getRenderer().updateFontSize();
       widget_.forceResize();
+      widget_.getLineWidgetManager().syncLineWidgetHeights();
    }
 
    public HandlerRegistration addValueChangeHandler(
@@ -3170,28 +3168,6 @@ public class AceEditor implements DocDisplay,
          
       } while (false);
       
-      // discover end of current statement
-      while (endRow <= endRowLimit)
-      {
-         // if the row ends with an open bracket, expand to its match
-         if (rowEndsWithOpenBracket(endRow))
-         {
-            c.moveToEndOfRow(endRow);
-            if (c.fwdToMatchingToken())
-            {
-               endRow = c.getRow();
-               continue;
-            }
-         }
-         else if (rowEndsInBinaryOp(endRow) || rowIsEmptyOrComment(endRow))
-         {
-            endRow++;
-            continue;
-         }
-         
-         break;
-      }
-      
       // discover start of current statement
       while (startRow >= startRowLimit)
       {
@@ -3213,6 +3189,56 @@ public class AceEditor implements DocDisplay,
          
          break;
       }
+      
+      // discover end of current statement -- we search from the inferred statement
+      // start, so that we can perform counting of matching pairs of brackets
+      endRow = startRow;
+      
+      // NOTE: '[[' is not tokenized as a single token in our Ace tokenizer,
+      // so it is not included here (this shouldn't cause issues in practice
+      // since balanced pairs of '[' and '[[' would still imply a correct count
+      // of matched pairs of '[' anyhow)
+      int parenCount = 0;   // '(', ')'
+      int braceCount = 0;   // '{', '}'
+      int bracketCount = 0; // '[', ']'
+      
+      while (endRow <= endRowLimit)
+      {
+         // update bracket token counts
+         JsArray<Token> tokens = getTokens(endRow);
+         for (Token token : JsUtil.asIterable(tokens))
+         {
+            String value = token.getValue();
+            
+            parenCount += value.equals("(") ? 1 : 0;
+            parenCount -= value.equals(")") ? 1 : 0;
+            
+            braceCount += value.equals("{") ? 1 : 0;
+            braceCount -= value.equals("}") ? 1 : 0;
+            
+            bracketCount += value.equals("[") ? 1 : 0;
+            bracketCount -= value.equals("]") ? 1 : 0;
+         }
+         
+         // continue search if line ends with binary operator
+         if (rowEndsInBinaryOp(endRow) || rowIsEmptyOrComment(endRow))
+         {
+            endRow++;
+            continue;
+         }
+         
+         // continue search if we have unbalanced brackets
+         if (parenCount > 0 || braceCount > 0 || bracketCount > 0)
+         {
+            endRow++;
+            continue;
+         }
+         
+         // we had balanced brackets and no trailing binary operator; bail
+         break;
+      }
+      
+      
       
       // shrink selection for empty lines at borders
       while (startRow < endRow && rowIsEmptyOrComment(startRow))
@@ -3386,6 +3412,12 @@ public class AceEditor implements DocDisplay,
    }
    
    @Override
+   public JsArray<Token> getTokens(int row)
+   {
+      return getSession().getTokens(row);
+   }
+   
+   @Override
    public TokenIterator createTokenIterator()
    {
       return createTokenIterator(null);
@@ -3463,9 +3495,24 @@ public class AceEditor implements DocDisplay,
    }-*/;
 
    @Override
-   public void addLineWidget(LineWidget widget)
+   public void addLineWidget(final LineWidget widget)
    {
+      // position the element far offscreen if it's above the currently
+      // visible row; Ace does not position line widgets above the viewport
+      // until the document is scrolled there
+      if (widget.getRow() < getFirstVisibleRow())
+      {
+         widget.getElement().getStyle().setTop(-10000, Unit.PX);
+         
+         // set left/right values so that the widget consumes space; necessary
+         // to get layout offsets inside the widget while rendering but before
+         // it comes onscreen
+         widget.getElement().getStyle().setLeft(48, Unit.PX);
+         widget.getElement().getStyle().setRight(15, Unit.PX);
+      }
+      
       widget_.getLineWidgetManager().addLineWidget(widget);
+      adjustScrollForLineWidget(widget);
       fireLineWidgetsChanged();
    }
    
@@ -3486,7 +3533,13 @@ public class AceEditor implements DocDisplay,
    @Override
    public void onLineWidgetChanged(LineWidget widget)
    {
+      // if the widget is above the viewport, this size change might push it
+      // into visibility, so push it offscreen first
+      if (widget.getRow() + 1 < getFirstVisibleRow())
+         widget.getElement().getStyle().setTop(-10000, Unit.PX);
+
       widget_.getLineWidgetManager().onWidgetChanged(widget);
+      adjustScrollForLineWidget(widget);
       fireLineWidgetsChanged();
    }
    
@@ -3500,6 +3553,36 @@ public class AceEditor implements DocDisplay,
    public LineWidget getLineWidgetForRow(int row)
    {
       return widget_.getLineWidgetManager().getLineWidgetForRow(row);
+   }
+   
+
+   @Override
+   public boolean hasLineWidgets()
+   {
+      return widget_.getLineWidgetManager().hasLineWidgets();
+   }
+
+   private void adjustScrollForLineWidget(LineWidget w)
+   {
+      // the cursor is above the line widget, so the line widget is going
+      // to change the cursor position; adjust the scroll position to hold 
+      // the cursor in place
+      if (getCursorPosition().getRow() > w.getRow())
+      {
+         int delta = w.getElement().getOffsetHeight() - w.getRenderedHeight();
+         
+         // skip if no change to report
+         if (delta == 0)
+            return;
+
+         // we adjust the scrolltop on the session since it knows the
+         // currently queued scroll position; the renderer only knows the 
+         // actual scroll position, which may not reflect unrendered changes
+         getSession().setScrollTop(getSession().getScrollTop() + delta);
+      }
+      
+      // mark the current height as rendered
+      w.setRenderedHeight(w.getElement().getOffsetHeight());
    }
    
    @Override
@@ -3550,12 +3633,6 @@ public class AceEditor implements DocDisplay,
    private void fireLineWidgetsChanged()
    {
       AceEditor.this.fireEvent(new LineWidgetsChangedEvent());
-   }
-   
-   @Override
-   public void renderLatex(Range range)
-   {
-      mathjax_.renderLatex(range);
    }
    
    private static class BackgroundTokenizer
@@ -3682,9 +3759,9 @@ public class AceEditor implements DocDisplay,
    private boolean showChunkOutputInline_ = false;
    private BackgroundTokenizer backgroundTokenizer_;
    private final Vim vim_;
-   private final MathJax mathjax_;
    private final AceEditorBackgroundLinkHighlighter bgLinkHighlighter_;
-   private final AceEditorIdleMonitor bgIdleMonitor_;
+   private int scrollTarget_ = 0;
+   private HandlerRegistration scrollCompleteReg_;
    
    private static final ExternalJavaScriptLoader getLoader(StaticDataResource release)
    {
