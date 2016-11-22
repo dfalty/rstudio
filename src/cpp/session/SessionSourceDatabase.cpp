@@ -1,7 +1,7 @@
 /*
  * SessionSourceDatabase.cpp
  *
- * Copyright (C) 2009-15 by RStudio, Inc.
+ * Copyright (C) 2009-16 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -40,11 +40,14 @@
 #include <r/RUtil.hpp>
 #include <r/RSexp.hpp>
 #include <r/RRoutines.hpp>
+#include <r/session/RSession.hpp>
 
 #include <session/SessionModuleContext.hpp>
 #include <session/projects/SessionProjects.hpp>
 
 #include "SessionSourceDatabaseSupervisor.hpp"
+
+#define kContentsSuffix "-contents"
 
 // NOTE: if a file is deleted then its properties database entry is not
 // deleted. this has two implications:
@@ -84,7 +87,7 @@ struct PropertiesDatabase
 
 Error getPropertiesDatabase(PropertiesDatabase* pDatabase)
 {
-   pDatabase->path = module_context::scopedScratchPath().complete("sdb/prop");
+   pDatabase->path = module_context::scopedScratchPath().complete(kSessionSourceDatabasePrefix "/prop");
    Error error = pDatabase->path.ensureDirectory();
    if (error)
       return error;
@@ -389,7 +392,6 @@ Error SourceDocument::readFromJson(json::Object* pDocJson)
    // what we expect things will blow up. therefore if we change the
    // persistence format we need to make sure this code is robust
    // in the presence of the old format
-
    try
    {
       json::Object& docJson = *pDocJson;
@@ -460,7 +462,7 @@ void SourceDocument::writeToJson(json::Object* pDocJson, bool includeContents) c
    jsonDoc["project_path"] = pathToProjectPath(path_);
    jsonDoc["type"] = !type().empty() ? type_ : json::Value();
    jsonDoc["hash"] = hash();
-   if (includeContents) jsonDoc["contents"] = contents();
+   jsonDoc["contents"] = includeContents ? contents() : std::string();
    jsonDoc["dirty"] = dirty();
    jsonDoc["created"] = created();
    jsonDoc["source_on_save"] = sourceOnSave();
@@ -483,16 +485,33 @@ SEXP SourceDocument::toRObject(r::sexp::Protect* pProtect, bool includeContents)
    return r::sexp::create(object, pProtect);
 }
 
-Error SourceDocument::writeToFile(const FilePath& filePath) const
+Error SourceDocument::writeToFile(const FilePath& filePath, bool writeContents) const
 {
-   // get json representation
-   json::Object jsonDoc ;
-   writeToJson(&jsonDoc);
-   std::ostringstream ostr ;
-   json::writeFormatted(jsonDoc, ostr);
-
-   // write to file
-   return writeStringToFile(filePath, ostr.str());
+   // NOTE: in a previous implementation, the document properties and
+   // document contents were encoded together in the same file -- we
+   // now use the original file as the properties file (for backwards
+   // compatibility), and write the contents to '<id>-contents'. this
+   // allows newer versions of RStudio to remain backwards-compatible
+   // with older formats for the source database
+   
+   // write contents to file
+   if (writeContents)
+   {
+      FilePath contentsPath(filePath.absolutePath() + kContentsSuffix);
+      Error error = writeStringToFile(contentsPath, contents_);
+      if (error)
+         return error;
+   }
+   
+   // get document properties as json
+   json::Object jsonProperties;
+   writeToJson(&jsonProperties, false);
+   
+   // write properties to file
+   std::ostringstream oss;
+   json::writeFormatted(jsonProperties, oss);
+   Error error = writeStringToFile(filePath, oss.str());
+   return error;
 }
 
 void SourceDocument::editProperty(const json::Object::value_type& property)
@@ -529,32 +548,48 @@ bool sortByRelativeOrder(const boost::shared_ptr<SourceDocument>& pDoc1,
    return pDoc1->relativeOrder() < pDoc2->relativeOrder();
 }
 
-namespace {
-
-FilePath s_sourceDBPath;
-
-} // anonymous namespace
-
 FilePath path()
 {
-   return s_sourceDBPath;
+   return supervisor::sessionDirPath();
 }
-   
+
 Error get(const std::string& id, boost::shared_ptr<SourceDocument> pDoc)
 {
-   FilePath filePath = source_database::path().complete(id);
-   if (filePath.exists())
+   return get(id, true, pDoc);
+}
+   
+Error get(const std::string& id, bool includeContents, boost::shared_ptr<SourceDocument> pDoc)
+{
+   FilePath propertiesPath = source_database::path().complete(id);
+   
+   // attempt to read file contents from sidecar file if available
+   std::string contents;
+   if (includeContents)
+   {
+      FilePath contentsPath(propertiesPath.absolutePath() + kContentsSuffix);
+      if (contentsPath.exists())
+      {
+         Error error = readStringFromFile(contentsPath,
+                                          &contents,
+                                          options().sourceLineEnding());
+         if (error)
+            LOG_ERROR(error);
+      }
+   }
+   
+   if (propertiesPath.exists())
    {
       // read the contents of the file
-      std::string contents ;
-      Error error = readStringFromFile(filePath, &contents,
+      std::string properties;
+      Error error = readStringFromFile(propertiesPath,
+                                       &properties,
                                        options().sourceLineEnding());
       if (error)
          return error;
    
       // parse the json
       json::Value value;
-      if ( !json::parse(contents, &value) )
+      if (!json::parse(properties, &value))
       {
          return systemError(boost::system::errc::invalid_argument,
                             ERROR_LOCATION);
@@ -562,6 +597,13 @@ Error get(const std::string& id, boost::shared_ptr<SourceDocument> pDoc)
       
       // initialize doc from json
       json::Object jsonDoc = value.get_obj();
+      
+      if (includeContents && !contents.empty())
+         jsonDoc["contents"] = contents;
+      
+      if (!jsonDoc.count("contents"))
+         jsonDoc["contents"] = std::string();
+      
       return pDoc->readFromJson(&jsonDoc);
    }
    else
@@ -580,12 +622,18 @@ bool isSourceDocument(const FilePath& filePath)
 {
    if (filePath.isDirectory())
       return false;
-   else if (filePath.filename() == ".DS_Store")
+   
+   std::string filename = filePath.filename();
+   if (filename == ".DS_Store" ||
+       filename == "lock_file" ||
+       filename == "suspend_file" ||
+       filename == "restart_file" ||
+       boost::algorithm::ends_with(filename, kContentsSuffix))
+   {
       return false;
-   else if (filePath.filename() == "lock_file")
-      return false;
-   else
-      return true;
+   }
+   
+   return true;
 }
 
 void logUnsafeSourceDocument(const FilePath& filePath,
@@ -684,11 +732,11 @@ Error list(std::vector<boost::shared_ptr<SourceDocument> >* pDocs)
    return Success();
 }
    
-Error put(boost::shared_ptr<SourceDocument> pDoc)
+Error put(boost::shared_ptr<SourceDocument> pDoc, bool writeContents)
 {   
    // write to file
    FilePath filePath = source_database::path().complete(pDoc->id());
-   Error error = pDoc->writeToFile(filePath);
+   Error error = pDoc->writeToFile(filePath, writeContents);
    if (error)
       return error ;
 
@@ -775,13 +823,20 @@ void onQuit()
    Error error = supervisor::saveMostRecentDocuments();
    if (error)
       LOG_ERROR(error);
-}
 
-void onShutdown(bool)
-{
-   Error error = supervisor::detachFromSourceDatabase();
+   error = supervisor::detachFromSourceDatabase();
    if (error)
       LOG_ERROR(error);
+}
+
+void onSuspend(const r::session::RSuspendOptions& options, core::Settings*)
+{
+   supervisor::suspendSourceDatabase(options.status);
+}
+
+void onResume(const Settings&)
+{
+   supervisor::resumeSourceDatabase();
 }
 
 void onDocUpdated(boost::shared_ptr<SourceDocument> pDoc)
@@ -845,7 +900,7 @@ Events& events()
 Error initialize()
 {
    // provision a source database directory
-   Error error = supervisor::attachToSourceDatabase(&s_sourceDBPath);
+   Error error = supervisor::attachToSourceDatabase();
    if (error)
       return error;
 
@@ -856,9 +911,10 @@ Error initialize()
    events().onDocRenamed.connect(onDocRenamed);
    events().onRemoveAll.connect(onRemoveAll);
 
-   // signup for the quit and shutdown events
+   // signup for session end/suspend events
    module_context::events().onQuit.connect(onQuit);
-   module_context::events().onShutdown.connect(onShutdown);
+   module_context::addSuspendHandler(
+         module_context::SuspendHandler(onSuspend, onResume));
 
    return Success();
 }

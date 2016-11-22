@@ -18,6 +18,7 @@
 #include "SessionExecuteChunkOperation.hpp"
 #include "NotebookCache.hpp"
 #include "NotebookAlternateEngines.hpp"
+#include "NotebookWorkingDir.hpp"
 
 #include <boost/algorithm/string.hpp>
 
@@ -227,7 +228,7 @@ Error executeStanEngineChunk(const std::string& docId,
    
    // write code to file
    FilePath tempFile = module_context::tempFile("stan-", ".stan");
-   error = writeStringToFile(tempFile, code);
+   error = writeStringToFile(tempFile, code + "\n");
    if (error)
    {
       reportChunkExecutionError(
@@ -241,26 +242,26 @@ Error executeStanEngineChunk(const std::string& docId,
    }
    RemoveOnExitScope removeOnExitScope(tempFile, ERROR_LOCATION);
    
-   // ensure existence of 'engine.opts' with 'output.var' parameter
-   // ('x' also allowed for backwards compatibility)
-   if (!options.count("engine.opts"))
-   {
-      reportStanExecutionError(docId, chunkId, nbCtxId, targetPath);
-      return Success();
-   }
-   
    // evaluate engine options (so we can pass them through to stan call)
    r::sexp::Protect protect;
    SEXP engineOptsSEXP = R_NilValue;
-   error = r::exec::evaluateString(
-            options.at("engine.opts"),
-            &engineOptsSEXP,
-            &protect);
-   
-   if (error)
+   if (options.count("engine.opts"))
    {
-      reportStanExecutionError(docId, chunkId, nbCtxId, targetPath);
-      return Success();
+      error = r::exec::evaluateString(
+               options.at("engine.opts"),
+               &engineOptsSEXP,
+               &protect);
+
+      if (error)
+      {
+         reportStanExecutionError(docId, chunkId, nbCtxId, targetPath);
+         return Success();
+      }
+   }
+   else
+   {
+      // if no engine.opts available, just use a plain empty list
+      engineOptsSEXP = r::sexp::createList(std::vector<std::string>(), &protect);
    }
    
    // construct call to 'stan_model'
@@ -289,6 +290,11 @@ Error executeStanEngineChunk(const std::string& docId,
                engineOptsNames[i],
                VECTOR_ELT(engineOptsSEXP, i));
    }
+   
+   // if 'output.var' was provided as part of the chunk parameters
+   // (not as part of 'engine.opts') then use that here
+   if (options.count("output.var"))
+      modelName = options.at("output.var");
    
    // if no model name was set, return error message
    if (modelName.empty())
@@ -446,6 +452,7 @@ Error interruptEngineChunk(const json::JsonRpcRequest& request,
 Error executeAlternateEngineChunk(const std::string& docId,
                                   const std::string& chunkId,
                                   const std::string& nbCtxId,
+                                  const core::FilePath& workingDir,
                                   const std::string& engine,
                                   const std::string& code,
                                   const json::Object& jsonChunkOptions)
@@ -459,17 +466,26 @@ Error executeAlternateEngineChunk(const std::string& docId,
       if (it->second.type() == json::StringType)
          options[it->first] = it->second.get_str();
    }
+
+   // set working directory
+   DirCapture dir;
+   dir.connectDir(docId, workingDir);
    
    // handle some engines with their own custom routines
+   Error error = Success();
    if (engine == "Rcpp")
-      return executeRcppEngineChunk(docId, chunkId, nbCtxId, code, options);
+      error = executeRcppEngineChunk(docId, chunkId, nbCtxId, code, options);
    else if (engine == "stan")
-      return executeStanEngineChunk(docId, chunkId, nbCtxId, code, options);
+      error = executeStanEngineChunk(docId, chunkId, nbCtxId, code, options);
    else if (engine == "sql")
-      return executeSqlEngineChunk(docId, chunkId, nbCtxId, code, jsonChunkOptions);
+      error = executeSqlEngineChunk(docId, chunkId, nbCtxId, code, jsonChunkOptions);
+   else
+      runChunk(docId, chunkId, nbCtxId, engine, code, options);
 
-   runChunk(docId, chunkId, nbCtxId, engine, code, options);
-   return Success();
+   // release working directory
+   dir.disconnect();
+
+   return error;
 }
 
 Error initAlternateEngines()

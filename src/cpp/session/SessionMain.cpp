@@ -686,6 +686,9 @@ void handleClientInit(const boost::function<void()>& initFunction,
    sessionInfo["knit_params_available"] =
          modules::rmarkdown::knitParamsAvailable();
 
+   sessionInfo["knit_working_dir_available"] = 
+         modules::rmarkdown::knitWorkingDirAvailable();
+
    sessionInfo["clang_available"] = modules::clang::isAvailable();
 
    // don't show help home until we figure out a sensible heuristic
@@ -709,16 +712,7 @@ void handleClientInit(const boost::function<void()>& initFunction,
    sessionInfo["connection_list"] = modules::connections::connectionsAsJson();
    sessionInfo["active_connections"] = modules::connections::activeConnectionsAsJson();
 
-   std::string sessionId = module_context::activeSession().id();
-   if (sessionId.empty())
-   {
-      // create virtual session ID if we don't have an explicitly assigned ID
-      sessionId = resumed ?
-         rsession::persistentState().virtualSessionId() :
-         rsession::persistentState().newVirtualSessionId();
-
-   }
-   sessionInfo["session_id"] = sessionId;
+   sessionInfo["session_id"] = module_context::activeSession().id();
 
    module_context::events().onSessionInfo(&sessionInfo);
 
@@ -1613,7 +1607,7 @@ void doSuspendForRestart(const rstudio::r::session::RSuspendOptions& options)
 Error suspendForRestart(const core::json::JsonRpcRequest& request,
                         json::JsonRpcResponse* pResponse)
 {
-   rstudio::r::session::RSuspendOptions options;
+   rstudio::r::session::RSuspendOptions options(EX_CONTINUE);
    Error error = json::readObjectParam(
                                request.params, 0,
                                "save_minimal", &(options.saveMinimal),

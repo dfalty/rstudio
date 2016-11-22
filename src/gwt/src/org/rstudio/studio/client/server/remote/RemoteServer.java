@@ -106,7 +106,6 @@ import org.rstudio.studio.client.rmarkdown.model.RmdOutputInfo;
 import org.rstudio.studio.client.rmarkdown.model.RmdTemplateContent;
 import org.rstudio.studio.client.rmarkdown.model.RmdYamlData;
 import org.rstudio.studio.client.rmarkdown.model.RmdYamlResult;
-import org.rstudio.studio.client.rsconnect.RSConnect;
 import org.rstudio.studio.client.rsconnect.model.RSConnectAccount;
 import org.rstudio.studio.client.rsconnect.model.RSConnectAppName;
 import org.rstudio.studio.client.rsconnect.model.RSConnectApplicationInfo;
@@ -471,11 +470,19 @@ public class RemoteServer implements Server
       sendRequest(RPC_SCOPE, GET_TERMINAL_OPTIONS, requestCallback);
    }
    
-   public void startShellDialog(
-                    ServerRequestCallback<ConsoleProcess> requestCallback)
+   public void startShellDialog(ConsoleProcess.TerminalType terminalType,
+                                int cols, int rows,
+                                boolean isModalDialog,
+                                ServerRequestCallback<ConsoleProcess> requestCallback)
    {
-      sendRequest(RPC_SCOPE, 
-                  START_SHELL_DIALOG,  
+      JSONArray params = new JSONArray();
+      params.set(0, new JSONString(terminalType.toString()));
+      params.set(1, new JSONNumber(cols));
+      params.set(2, new JSONNumber(rows));
+      params.set(3, JSONBoolean.getInstance(isModalDialog));
+      sendRequest(RPC_SCOPE,
+                  START_SHELL_DIALOG,
+                  params,
                   new ConsoleProcessCallbackAdapter(requestCallback));
    }
    
@@ -607,7 +614,19 @@ public class RemoteServer implements Server
       sendRequest(RPC_SCOPE, PROCESS_WRITE_STDIN, params, requestCallback);
    }
 
-
+   @Override
+   public void processSetShellSize(String handle,
+                                   int width,
+                                   int height,
+                                   ServerRequestCallback<Void> requestCallback)
+   {
+      JSONArray params = new JSONArray();
+      params.set(0, new JSONString(handle));
+      params.set(1, new JSONNumber(width));
+      params.set(2,  new JSONNumber(height));
+      sendRequest(RPC_SCOPE, PROCESS_SET_SIZE, params, requestCallback);
+   }
+   
    public void interrupt(ServerRequestCallback<Void> requestCallback)
    {
       sendRequest(RPC_SCOPE, INTERRUPT, requestCallback);
@@ -4123,7 +4142,7 @@ public class RemoteServer implements Server
    @Override
    public void renderRmd(String file, int line, String format, String encoding,
                          String paramsFile, boolean asTempfile, int type,
-                         String existingOutputFile,
+                         String existingOutputFile, String workingDir,
          ServerRequestCallback<Boolean> requestCallback)
    {
       JSONArray params = new JSONArray();
@@ -4135,6 +4154,7 @@ public class RemoteServer implements Server
       params.set(5, JSONBoolean.getInstance(asTempfile));
       params.set(6, new JSONNumber(type));
       params.set(7, new JSONString(StringUtil.notNull(existingOutputFile)));
+      params.set(8, new JSONString(StringUtil.notNull(workingDir)));
       sendRequest(RPC_SCOPE,
             RENDER_RMD,
             params,
@@ -4903,6 +4923,7 @@ public class RemoteServer implements Server
    private static final String PROCESS_INTERRUPT = "process_interrupt";
    private static final String PROCESS_REAP = "process_reap";
    private static final String PROCESS_WRITE_STDIN = "process_write_stdin";
+   private static final String PROCESS_SET_SIZE = "process_set_size";
 
    private static final String REMOVE_ALL_OBJECTS = "remove_all_objects";
    private static final String REMOVE_OBJECTS = "remove_objects";

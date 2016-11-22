@@ -92,7 +92,7 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
    
    # Read the chunk information
    chunkInfoPath <- file.path(cachePath, "chunks.json")
-   chunkInfo <- .rs.fromJSON(.rs.readFile(chunkInfoPath))
+   chunkInfo <- .rs.fromJSON(.rs.readFile(chunkInfoPath, encoding = "UTF-8"))
    names(chunkInfo$chunk_definitions) <-
       unlist(lapply(chunkInfo$chunk_definitions, `[[`, "chunk_id"))
    rnbData[["chunk_info"]] <- chunkInfo
@@ -105,10 +105,14 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
    chunkData <- lapply(chunkDirs, function(dir) {
       files <- list.files(dir, full.names = TRUE)
       contents <- lapply(files, function(file) {
-         .rs.readFile(file, binary = .rs.endsWith(file, "png") || 
-                                     .rs.endsWith(file, "jpg") ||
-                                     .rs.endsWith(file, "jpeg") ||
-                                     .rs.endsWith(file, "rdf"))
+         .rs.readFile(
+            file,
+            encoding = "UTF-8",
+            binary = .rs.endsWith(file, "png")  ||
+                     .rs.endsWith(file, "jpg")  ||
+                     .rs.endsWith(file, "jpeg") ||
+                     .rs.endsWith(file, "rdf")
+         )
       })
       names(contents) <- basename(files)
       contents
@@ -123,7 +127,7 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
    if (file.exists(libDir)) {
       owd <- setwd(libDir)
       libFiles <- list.files(libDir, recursive = TRUE)
-      libData <- lapply(libFiles, .rs.readFile)
+      libData <- lapply(libFiles, .rs.readFile, encoding = "UTF-8")
       names(libData) <- libFiles
       rnbData[["lib"]] <- libData
       setwd(owd)
@@ -145,7 +149,7 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
 {
    chunkDefns <- rnbData$chunk_info$chunk_definitions
    for (defn in chunkDefns) {
-      if (identical(defn$chunk_label, label))
+      if (identical(defn$options$label, label))
          return(defn$chunk_id)
    }
    return(NULL)
@@ -217,7 +221,7 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
       
       # read and restore 'html_dependency' class (this may not be
       # preserved in the serialized JSON file)
-      jsonContents <- .rs.fromJSON(.rs.readFile(jsonPath))
+      jsonContents <- .rs.fromJSON(.rs.readFile(jsonPath, encoding = "UTF-8"))
       for (i in seq_along(jsonContents))
          class(jsonContents[[i]]) <- "html_dependency"
       
@@ -333,7 +337,7 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
          metadataName <- .rs.withChangedExtension(fileName, ".metadata")
          metadataPath <- file.path(rnbData$cache_path, chunkId, metadataName)
          if (file.exists(metadataPath))
-            metadata <- .rs.fromJSON(.rs.readFile(metadataPath))
+            metadata <- .rs.fromJSON(.rs.readFile(metadataPath, encoding = "UTF-8"))
          
          # find and execute handler for extension (return NULL if no handler defined)
          ext <- tools::file_ext(fileName)
@@ -399,15 +403,38 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
 
    # set up output_source
    outputOptions <- list(output_source = .rs.rnb.outputSource(rnbData))
-   
-   # call render with special format hooks
-   rmarkdown::render(input = inputFile,
-                     output_format = "html_notebook",
-                     output_options = outputOptions,
-                     output_file = outputFile,
-                     quiet = TRUE,
-                     envir = envir,
-                     encoding = encoding)
+
+   # knitr outputs relevant information in the form of messages that we attach to the error
+   renderMessages <- list()
+   tryCatch({
+      withCallingHandlers({
+         # call render with special format hooks
+         rmarkdown::render(input = inputFile,
+                           output_format = "html_notebook",
+                           output_options = outputOptions,
+                           output_file = outputFile,
+                           quiet = TRUE,
+                           envir = envir,
+                           encoding = encoding)
+      }, message = function(...) {
+         args <- list(...)
+         renderMessages <<- c(renderMessages, args[[1]])
+      })
+   }, error = function(e) {
+      messages <- list(e$message)
+
+      lapply(renderMessages, function(m) {
+        if (typeof(m) != "character") return();
+
+        result <- regexec("Quitting from lines ([0-9]+)-([0-9]+) ", text = m)
+        if (result[[1]][[1]] < 0) return();
+
+        groups <- regmatches(m, result)[[1]]
+        messages <<- c(messages, paste("See line ", (strtoi(groups[[2]]) - 1), sep = ""))
+      })
+
+      stop(paste(messages, collpase = ". ", sep = ""))
+   })
 })
 
 .rs.addFunction("createNotebookFromCache", function(rmdPath, outputPath = NULL)

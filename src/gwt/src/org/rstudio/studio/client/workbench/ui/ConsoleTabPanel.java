@@ -51,6 +51,8 @@ public class ConsoleTabPanel extends WorkbenchTabPanel
                           WorkbenchTab renderRmdTab, 
                           WorkbenchTab deployContentTab,
                           MarkersOutputTab markersTab,
+                          WorkbenchTab terminalTab,
+                          boolean enableTerminalTab,
                           EventBus events,
                           ToolbarButton goToWorkingDirButton)
    {
@@ -64,6 +66,8 @@ public class ConsoleTabPanel extends WorkbenchTabPanel
       renderRmdTab_ = renderRmdTab;
       deployContentTab_ = deployContentTab;
       markersTab_ = markersTab;
+      terminalTab_ = terminalTab;
+      enableTerminalTab_ = enableTerminalTab;
       
       RStudioGinjector.INSTANCE.injectMembers(this);
 
@@ -206,7 +210,7 @@ public class ConsoleTabPanel extends WorkbenchTabPanel
                selectTab(0);
          }
       });
-
+      
       events.addHandler(WorkingDirChangedEvent.TYPE, new WorkingDirChangedHandler()
       {
          @Override
@@ -220,13 +224,14 @@ public class ConsoleTabPanel extends WorkbenchTabPanel
          }
       });
 
-      consoleOnly_ = false;
+      consoleOnly_ = enableTerminalTab_; 
       managePanels();
    }
 
    private void managePanels()
    {
-      boolean consoleOnly = !compilePdfTabVisible_ && 
+      boolean consoleOnly = !enableTerminalTab_ &&
+                            !compilePdfTabVisible_ && 
                             !findResultsTabVisible_ &&
                             !sourceCppTabVisible_ &&
                             !renderRmdTabVisible_ &&
@@ -237,6 +242,8 @@ public class ConsoleTabPanel extends WorkbenchTabPanel
       {
          ArrayList<WorkbenchTab> tabs = new ArrayList<WorkbenchTab>();
          tabs.add(consolePane_);
+         if (enableTerminalTab_)
+            tabs.add(terminalTab_);
          if (compilePdfTabVisible_)
             tabs.add(compilePdfTab_);
          if (findResultsTabVisible_)
@@ -297,6 +304,8 @@ public class ConsoleTabPanel extends WorkbenchTabPanel
    private boolean deployContentTabVisible_;
    private final MarkersOutputTab markersTab_;
    private boolean markersTabVisible_;
+   private final WorkbenchTab terminalTab_;
+   private boolean enableTerminalTab_;
    private ConsoleInterruptButton consoleInterrupt_;
    private ConsoleInterruptProfilerButton consoleInterruptProfiler_;
    private final ToolbarButton goToWorkingDirButton_;
