@@ -14,12 +14,24 @@
  */
 package org.rstudio.studio.client.projects.ui.newproject;
 
+import org.rstudio.core.client.Debug;
+import org.rstudio.core.client.files.FileSystemItem;
 import org.rstudio.core.client.js.JsUtil;
+import org.rstudio.core.client.resources.ImageResource2x;
+import org.rstudio.core.client.widget.MessageDialog;
+import org.rstudio.core.client.widget.OperationWithInput;
 import org.rstudio.core.client.widget.SelectWidget;
+import org.rstudio.studio.client.RStudioGinjector;
 import org.rstudio.studio.client.projects.Projects;
 import org.rstudio.studio.client.projects.model.NewPackageOptions;
 import org.rstudio.studio.client.projects.model.NewProjectInput;
+import org.rstudio.studio.client.projects.model.NewProjectResult;
+import org.rstudio.studio.client.server.ServerError;
+import org.rstudio.studio.client.server.ServerRequestCallback;
+import org.rstudio.studio.client.workbench.views.files.model.DirectoryListing;
+import org.rstudio.studio.client.workbench.views.files.model.FilesServerOperations;
 
+import com.google.gwt.core.client.JsArray;
 import com.google.gwt.core.client.Scheduler;
 import com.google.gwt.core.client.Scheduler.ScheduledCommand;
 import com.google.gwt.event.dom.client.ChangeEvent;
@@ -27,18 +39,20 @@ import com.google.gwt.event.dom.client.ChangeHandler;
 import com.google.gwt.event.dom.client.KeyDownEvent;
 import com.google.gwt.event.dom.client.KeyDownHandler;
 import com.google.gwt.user.client.ui.HorizontalPanel;
+import com.google.inject.Inject;
 
 
 public class NewPackagePage extends NewDirectoryPage
 {
    public NewPackagePage()
    {
-      super("R Package", 
+      super("R Package",
             "Create a new R package",
             "Create R Package",
-            NewProjectResources.INSTANCE.packageIcon(),
-            NewProjectResources.INSTANCE.packageIconLarge());
+            new ImageResource2x(NewProjectResources.INSTANCE.packageIcon2x()),
+            new ImageResource2x(NewProjectResources.INSTANCE.packageIconLarge2x()));
       
+      RStudioGinjector.INSTANCE.injectMembers(this);
       styles_ = NewProjectResources.INSTANCE.styles();
       
       txtProjectName_.addKeyDownHandler(new KeyDownHandler()
@@ -58,6 +72,12 @@ public class NewPackagePage extends NewDirectoryPage
          }
       });
       
+   }
+   
+   @Inject
+   private void initialize(FilesServerOperations server)
+   {
+      server_ = server;
    }
    
    protected boolean getOptionsSideBySide()
@@ -93,7 +113,6 @@ public class NewPackagePage extends NewDirectoryPage
       listCodeFiles_ = new CodeFilesList();
       addWidget(listCodeFiles_);
    }
-   
    
    @Override 
    protected void initialize(NewProjectInput input)
@@ -135,7 +154,102 @@ public class NewPackagePage extends NewDirectoryPage
       return Projects.PACKAGE_NAME_PATTERN.test(packageName);
    }
    
+   @Override
+   protected void validateAsync(final NewProjectResult input,
+                                final OperationWithInput<Boolean> onValidated)
+   {
+      // validate package name first
+      String packageName = txtProjectName_.getText().trim();
+      if (!isPackageNameValid(packageName))
+      {
+         globalDisplay_.showMessage(
+               MessageDialog.WARNING,
+               "Error",
+               "Invalid package name '" + packageName + "'. Package names " +
+               "should start with a letter, and contain only letters and numbers.");
+         onValidated.execute(false);
+         return;
+      }
+      
+      final FileSystemItem projFile = FileSystemItem.createFile(input.getProjectFile());
+      final FileSystemItem projDir = projFile.getParentPath();
+      server_.stat(projDir.getPath(), new ServerRequestCallback<FileSystemItem>()
+      {
+         @Override
+         public void onResponseReceived(final FileSystemItem item)
+         {
+            // no file at this path -- safe for use
+            if (!item.exists())
+            {
+               onValidated.execute(true);
+               return;
+            }
+            
+            // if it was a file, bail
+            if (!item.isDirectory())
+            {
+               globalDisplay_.showMessage(
+                     MessageDialog.WARNING,
+                     "Error",
+                     "A file already exists at path '" + item.getPath() + "'");
+               onValidated.execute(false);
+               return;
+            }
+            
+            // check if this directory is empty
+            server_.listFiles(item, false, new ServerRequestCallback<DirectoryListing>()
+            {
+               @Override
+               public void onResponseReceived(DirectoryListing listing)
+               {
+                  boolean ok = true;
+                  JsArray<FileSystemItem> children = listing.getFiles();
+                  for (FileSystemItem child : JsUtil.asIterable(children))
+                  {
+                     boolean canIgnore =
+                           child.getExtension().equals(".Rproj") ||
+                           child.getName().startsWith(".");
+                     
+                     if (canIgnore)
+                        continue;
+                     
+                     ok = false;
+                     break;
+                  }
+                  
+                  if (!ok)
+                  {
+                     globalDisplay_.showMessage(
+                          MessageDialog.WARNING,
+                          "Error",
+                          "Directory '" + item.getPath() + "' already exists and is not empty.");
+                  }
+                  
+                  onValidated.execute(ok);
+               }
+               
+               @Override
+               public void onError(ServerError error)
+               {
+                  Debug.logError(error);
+                  onValidated.execute(true);
+               }
+            });
+         }
+         
+         @Override
+         public void onError(ServerError error)
+         {
+            Debug.logError(error);
+            onValidated.execute(true);
+         }
+      });
+   }
+
    private SelectWidget listProjectType_;
    private CodeFilesList listCodeFiles_;
    private final NewProjectResources.Styles styles_;
+   
+   // Injected ----
+   private FilesServerOperations server_;
 }

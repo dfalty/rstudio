@@ -1,7 +1,7 @@
 #
 # SessionDataViewer.R
 #
-# Copyright (C) 2009-15 by RStudio, Inc.
+# Copyright (C) 2009-17 by RStudio, Inc.
 #
 # Unless you have received this program directly from RStudio pursuant
 # to the terms of a commercial license agreement with RStudio, then
@@ -49,7 +49,7 @@
    vals
 })
 
-.rs.addFunction("describeCols", function(x, maxCols, maxFactors) 
+.rs.addFunction("describeCols", function(x, maxFactors) 
 {
   colNames <- names(x)
 
@@ -77,9 +77,6 @@
   if (length(colNames) == 0) {
     return(rowNameCol)
   }
-
-  # truncate to maximum displayed number of columns
-  colNames <- colNames[1:min(length(colNames), maxCols)]
 
   # get the attributes for each column
   colAttrs <- lapply(seq_along(colNames), function(idx) {
@@ -585,6 +582,26 @@
      invisible(.Call("rs_viewFunction", x, title, namespace))
      return(invisible(NULL))
    }
+   else if (inherits(x, "vignette"))
+   {
+     file.edit(file.path(x$Dir, "doc", x$File))
+     return(invisible(NULL))
+   }
+   
+   # if this is a (non-data.frame) list or environment,
+   # delegate to object explorer
+   isListLike <-
+      (is.list(x) && !is.data.frame(x)) ||
+      is.environment(x)
+   
+   if (isListLike)
+   {
+      view <- .rs.explorer.viewObject(x,
+                                      title = title,
+                                      envir = env)
+      return(invisible(view))
+   }
+      
 
    # test for coercion to data frame--the goal of this expression is just to
    # raise an error early if the object can't be made into a frame; don't
@@ -700,5 +717,15 @@
 .rs.addFunction("assignWorkingData", function(cacheKey, obj)
 {
   assign(cacheKey, obj, .rs.WorkingDataEnv)
+})
+
+.rs.addFunction("findGlobalData", function(name)
+{
+  if (exists(name, envir = globalenv()))
+  {
+    if (inherits(get(name, envir = globalenv()), "data.frame"))
+       return(name)
+  }
+  invisible("")
 })
 

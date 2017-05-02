@@ -1,7 +1,7 @@
 #
 # SessionRmdNotebook.R
 #
-# Copyright (C) 2009-16 by RStudio, Inc.
+# Copyright (C) 2009-17 by RStudio, Inc.
 #
 # Unless you have received this program directly from RStudio pursuant
 # to the terms of a commercial license agreement with RStudio, then
@@ -104,6 +104,12 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
    chunkDirs <- file.path(cachePath, names(chunkInfo$chunk_definitions))
    chunkData <- lapply(chunkDirs, function(dir) {
       files <- list.files(dir, full.names = TRUE)
+
+      # exclude directories
+      fileInfo <- file.info(files)
+      files <- files[!fileInfo$isdir]
+
+      # extract the contents from each regular file
       contents <- lapply(files, function(file) {
          .rs.readFile(
             file,
@@ -149,7 +155,7 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
 {
    chunkDefns <- rnbData$chunk_info$chunk_definitions
    for (defn in chunkDefns) {
-      if (identical(defn$options$label, label))
+      if (identical(defn$chunk_label, label))
          return(defn$chunk_id)
    }
    return(NULL)
@@ -296,9 +302,25 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
       # determine whether we include source code (respect chunk options)
       includeSource <- isTRUE(context$echo) && isTRUE(context$include)
       
-      # if we have no chunk outputs, just show source code (respecting
-      # chunk options as appropriate)
-      if (is.null(chunkId)) {
+      if (identical(context$engine, "js") || identical(context$engine, "css")) {
+         # these engines never show code; ensure they're marked for evaluation
+         # and then emit contents literally wrapped in the appropriate tags
+         htmlOutput <- ""
+         if (isTRUE(context$eval)) {
+            if (identical(context$engine, "js")) {
+               htmlOutput <- paste(
+                  c('<script type="text/javascript">', code, '</script>'),
+                    collapse = '\n')
+            } else if (identical(context$engine, "css")) {
+               htmlOutput <- paste(
+                  c('<style type="text/css">', code, '</style>'),
+                    collapse = '\n')
+            }
+         }
+         return(knitr::asis_output(htmlOutput))
+      } else if (is.null(chunkId)) {
+         # if we have no chunk outputs, just show source code (respecting
+         # chunk options as appropriate)
          if (includeSource) {
             attributes <- list(class = .rs.rnb.engineToCodeClass(context$engine))
             
@@ -476,6 +498,9 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
 
 .rs.addFunction("rnb.renderVerbatimConsoleInput", function(code, engine, indent)
 {
+   if (length(code) == 1)
+      code <- strsplit(code, "\n", fixed = TRUE)[[1]]
+   
    # remove indentation from code
    code <- substring(code, nchar(indent) + 1)
    
@@ -981,8 +1006,22 @@ assign(".rs.notebookVersion", envir = .rs.toolsEnv(), "1.0")
 
 .rs.addFunction("setDefaultChunkOptions", function()
 {
-   # cache the current set of chunk options
+   # get the current set of chunk options
    chunkOptions <- knitr::opts_chunk$get()
+
+   # make sure global connection lists exists
+   if (!exists(".rs.knitr.chunkReferences", envir = .rs.toolsEnv()))
+      assign(".rs.knitr.chunkReferences", list(), envir = .rs.toolsEnv())
+   
+   # assign connection
+   chunkReferences <- get(".rs.knitr.chunkReferences", envir = .rs.toolsEnv())
+   if (!is.null(chunkOptions$connection) && !is.character(chunkOptions$connection)) {
+      idReference <- length(chunkReferences) + 1
+      chunkReferences[[idReference]] <- chunkOptions$connection
+      chunkOptions$connection <- idReference
+   }
+
+   # cache the current set of chunk options
    assign(".rs.knitr.chunkOptions", chunkOptions, envir = .rs.toolsEnv())
 
    # cache the set of external code

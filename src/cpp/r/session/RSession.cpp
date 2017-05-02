@@ -31,6 +31,7 @@
 #include <core/system/Environment.hpp>
 #include <core/FileSerializer.hpp>
 #include <core/FileUtils.hpp>
+#include <core/RegexUtils.hpp>
 #include <core/http/Util.hpp>
 
 #include <r/RExec.hpp>
@@ -41,6 +42,7 @@
 #include <r/RRoutines.hpp>
 #include <r/RInterface.hpp>
 #include <r/RFunctionHook.hpp>
+#include <r/session/RSessionState.hpp>
 #include <r/session/RConsoleActions.hpp>
 #include <r/session/RConsoleHistory.hpp>
 #include <r/session/RClientState.hpp>
@@ -48,7 +50,6 @@
 #include <r/session/RDiscovery.hpp>
 
 #include "RClientMetrics.hpp"
-#include "RSessionState.hpp"
 #include "RRestartContext.hpp"
 #include "REmbedded.hpp"
 
@@ -112,7 +113,7 @@ bool s_initialized = false;
 bool s_suspended = false;
 
 // temporarily suppress output
-bool s_suppressOuput = false;
+bool s_suppressOutput = false;
 
 FilePath rHistoryFilePath()
 {
@@ -649,7 +650,7 @@ bool consoleInputHook(const std::string& prompt,
    // check for user quit invocation
     boost::regex re("^\\s*(q|quit)\\s*\\(.*$");
     boost::smatch match;
-    if (boost::regex_match(input, match, re))
+    if (regex_utils::match(input, match, re))
    {
       if (!s_callbacks.handleUnsavedChanges())
       {
@@ -826,7 +827,7 @@ void RWriteConsoleEx (const char *buf, int buflen, int otype)
 {
    try
    {
-      if (!s_suppressOuput)
+      if (!s_suppressOutput)
       {
          // get output
          std::string output = std::string(buf,buflen);
@@ -1797,12 +1798,12 @@ FilePath tempDir()
 
 SuppressOutputInScope::SuppressOutputInScope()
 {
-  s_suppressOuput = true;
+  s_suppressOutput = true;
 }
 
 SuppressOutputInScope::~SuppressOutputInScope()
 {
-   s_suppressOuput = false;
+   s_suppressOutput = false;
 }
 
 } // namespace utils

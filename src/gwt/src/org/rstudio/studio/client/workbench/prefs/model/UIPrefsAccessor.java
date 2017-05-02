@@ -1,7 +1,7 @@
 /*
  * UIPrefsAccessor.java
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -14,6 +14,7 @@
  */
 package org.rstudio.studio.client.workbench.prefs.model;
 
+import org.rstudio.core.client.VirtualConsole;
 import org.rstudio.core.client.js.JsObject;
 import org.rstudio.studio.client.application.Desktop;
 import org.rstudio.studio.client.notebook.CompileNotebookPrefs;
@@ -305,6 +306,11 @@ public class UIPrefsAccessor extends Prefs
       return integer("truncate_long_lines_in_console", 1000);
    }
    
+   public PrefValue<Integer> consoleAnsiMode()
+   {
+      return integer("ansi_console_mode", VirtualConsole.ANSI_COLOR_ON);
+   }
+   
    public PrefValue<Boolean> showInlineToolbarForRCodeChunks()
    {
       return bool("show_inline_toolbar_for_r_code_chunks", true);
@@ -549,12 +555,6 @@ public class UIPrefsAccessor extends Prefs
    {
       return bool("show_publish_diagnostics", false);
    }
-   
-   public PrefValue<String> connectionsDbInterface()
-   {
-      return string("connections_db_interface", 
-                    ConnectionOptions.DB_INTERFACE_DPLYR);
-   }
      
    public PrefValue<Boolean> showRmdChunkOutputInline()
    {
@@ -581,14 +581,33 @@ public class UIPrefsAccessor extends Prefs
       return bool("hide_console_on_chunk_execute", true);
    }
    
-   public PrefValue<Boolean> executeMultiLineStatements()
+   public static final String EXECUTE_LINE      = "line";
+   public static final String EXECUTE_STATEMENT = "statement";
+   public static final String EXECUTE_PARAGRAPH = "paragraph";
+   
+   public PrefValue<String> executionBehavior()
    {
-      return bool("execute_multi_line_statements", true);
+      return string("execution_behavior", EXECUTE_STATEMENT);
    }
    
-   public PrefValue<Boolean> enableXTerm()
+   public PrefValue<Boolean> showTerminalTab()
    {
-      return bool("enable_xterm", false);
+      return bool("show_terminal_tab", true);
+   }
+   
+   public PrefValue<Boolean> enableReportTerminalLag()
+   {
+      return bool("enable_report_terminal_lag", false);
+   }
+   
+   public PrefValue<Boolean> terminalLocalEcho()
+   {
+      return bool("terminal_local_echo", true);
+   }
+   
+   public PrefValue<Boolean> terminalUseWebsockets()
+   {
+      return bool("terminal_websockets", true);
    }
    
    public static final String KNIT_DIR_DEFAULT = "default";
@@ -616,6 +635,16 @@ public class UIPrefsAccessor extends Prefs
    public PrefValue<String> showLatexPreviewOnCursorIdle()
    {
       return string("latex_preview_on_cursor_idle", LATEX_PREVIEW_SHOW_ALWAYS);
+   }
+   
+   public PrefValue<Boolean> wrapTabNavigation()
+   {
+      return bool("wrap_tab_navigation", false);
+   }
+
+   public PrefValue<String> getFlatTheme()
+   {
+      return string("flat_theme", "classic");
    }
    
    private String getDefaultPdfPreview()

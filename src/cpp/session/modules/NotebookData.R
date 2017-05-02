@@ -170,7 +170,7 @@
                           factor = "fctr",
                           POSIXt = "dttm",
                           difftime = "time",
-                          Date = date,
+                          Date = "date",
                           data.frame = class(x)[[1]],
                           tbl_df = "tibble",
                           NULL
@@ -356,14 +356,23 @@
   max.print <- if (is.null(options$max.print)) getOption("max.print", 1000) else as.numeric(options$max.print)
   max.print <- if (is.null(options$sql.max.print)) max.print else as.numeric(options$sql.max.print)
 
-  if (is.null(options$connection)) stop(
-    "The 'connection' option (DBI connection) is required for sql chunks."
-  )
+  conn <- options$connection
+  
+  if (is.numeric(options$connection)) {
+    chunkReferences <- get(".rs.knitr.chunkReferences", envir = .rs.toolsEnv())
+    conn <- chunkReferences[[chunkOptions$connection]]
+  }
 
-  conn <- get(options$connection, envir = globalenv())
-  if (is.null(conn)) stop(
-    "The 'connection' option must be a valid DBI connection."
-  )
+  if (is.null(conn)) {
+    stop("The 'connection' option (DBI connection) is required for sql chunks.")
+  }
+
+  if (is.character(options$connection)) {
+    conn <- get(options$connection, envir = globalenv())
+    if (is.null(conn)) stop(
+      "The 'connection' option must be a valid DBI connection."
+    )
+  }
 
   # Return char vector of sql interpolation param names
   varnames_from_sql <- function(conn, sql) {
@@ -432,5 +441,5 @@
     any(class(get(objName, envir = globalenv())) %in% dbiClassNames)
   }, ls(envir = globalenv()))
 
-  if (length(dbiObjectNames) > 0) .rs.scalar(dbiObjectNames[[1]]) else null
+  if (length(dbiObjectNames) > 0) .rs.scalar(dbiObjectNames[[1]]) else NULL
 })

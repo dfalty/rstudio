@@ -1,7 +1,7 @@
 /*
  * SessionSVN.cpp
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -244,7 +244,6 @@ core::Error createConsoleProc(const ShellArgs& args,
                               const boost::optional<FilePath>& workingDir,
                               const std::string& caption,
                               bool requiresSsh,
-                              bool dialog,
                               bool enqueueRefreshOnExit,
                               boost::shared_ptr<ConsoleProcess>* ppCP)
 {
@@ -267,14 +266,12 @@ core::Error createConsoleProc(const ShellArgs& args,
    if (!outputFile.empty())
       options.stdOutFile = outputFile;
 
-   // create the process
    using namespace session::console_process;
-   *ppCP = ConsoleProcess::create(command,
-                                  options,
-                                  caption,
-                                  dialog,
-                                  InteractionPossible,
-                                  kDefaultMaxOutputLines);
+   boost::shared_ptr<ConsoleProcessInfo> pCPI =
+           boost::make_shared<ConsoleProcessInfo>(caption, InteractionPossible);
+
+   // create the process
+   *ppCP = ConsoleProcess::create(command, options, pCPI);
 
    if (enqueueRefreshOnExit)
       (*ppCP)->onExit().connect(boost::bind(&enqueueRefreshEvent));
@@ -285,7 +282,6 @@ core::Error createConsoleProc(const ShellArgs& args,
 core::Error createConsoleProc(const ShellArgs& args,
                               const std::string& caption,
                               bool requiresSsh,
-                              bool dialog,
                               bool enqueueRefreshOnExit,
                               boost::shared_ptr<ConsoleProcess>* ppCP)
 {
@@ -294,7 +290,6 @@ core::Error createConsoleProc(const ShellArgs& args,
                             boost::optional<FilePath>(),
                             caption,
                             requiresSsh,
-                            dialog,
                             enqueueRefreshOnExit,
                             ppCP);
 }
@@ -348,7 +343,6 @@ void runSvnAsync(const ShellArgs& args,
                                    boost::optional<FilePath>(),
                                    caption,
                                    s_isSvnSshRepository,
-                                   true,
                                    enqueueRefreshOnExit,
                                    &pCP);
    if (error)
@@ -994,7 +988,6 @@ Error svnUpdate(const json::JsonRpcRequest& request,
                                    "SVN Update",
                                    s_isSvnSshRepository,
                                    true,
-                                   true,
                                    &pCP);
    if (error)
       return error;
@@ -1065,7 +1058,6 @@ Error svnCommit(const json::JsonRpcRequest& request,
    error = createConsoleProc(args,
                              "SVN Commit",
                              s_isSvnSshRepository,
-                             true,
                              true,
                              &pCP);
    if (error)
@@ -1732,7 +1724,6 @@ Error checkout(const std::string& url,
                                    "SVN Checkout",
                                    requiresSsh,
                                    true,
-                                   true,
                                    ppCP);
 
    if (error)
@@ -1837,7 +1828,7 @@ Error augmentSvnIgnore()
    else
    {
       // If svn:ignore exists, add .Rproj.user unless it's already there
-      if (boost::regex_search(svnIgnore, boost::regex("^\\.Rproj\\.user$")))
+      if (regex_utils::search(svnIgnore, boost::regex("^\\.Rproj\\.user$")))
          return Success();
 
       bool addExtraNewline = svnIgnore.size() > 0

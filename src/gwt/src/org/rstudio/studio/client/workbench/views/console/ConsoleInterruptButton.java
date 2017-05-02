@@ -1,7 +1,7 @@
 /*
  * ConsoleInterruptButton.java
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -83,7 +83,7 @@ public class ConsoleInterruptButton extends Composite
       client goes out of network coverage and then the server suspends before
       it can come back into coverage). For this reason I think that the icon's
       controller logic should subscribe to the ConsolePromptEvent and clear it
-      whenenver a prompt occurs.
+      whenever a prompt occurs.
       */
       events.addHandler(ConsolePromptEvent.TYPE, new ConsolePromptHandler()
       {

@@ -1,7 +1,7 @@
 /*
  * GeneralPrefs.java
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -44,7 +44,6 @@ public class GeneralPrefs extends JavaScriptObject
       return prefs ;
    }-*/;
 
-   
    public native final String getShowUserHomePage() /*-{
       return this.show_user_home_page;
    }-*/;
@@ -80,5 +79,4 @@ public class GeneralPrefs extends JavaScriptObject
    public native final boolean getShowLastDotValue() /*-{
       return this.show_last_dot_value;
    }-*/;
-   
 }

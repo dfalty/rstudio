@@ -20,15 +20,16 @@ fi
 
 cd xterm.js
 git clean -dfx
-# xterm version 2.1.0
-git checkout 521d7db
+
+# xterm version 2.5.0
+git checkout d2f8f9d
 
 # install and build via Babel
 npm install --only=dev
 npm run build 
 
 XTERM_BUILD_DIR=./build
-XTERM_ADDONS_DIR=./addons
+XTERM_ADDONS_DIR=./dist/addons
 XTERM_TARGET_DIR=../../src/org/rstudio/studio/client/workbench/views/terminal/xterm
 
 # stylesheet
@@ -48,5 +49,8 @@ minify () {
 minify ${XTERM_BUILD_DIR}/xterm.js ${XTERM_TARGET_DIR}/xterm.js
 minify ${XTERM_ADDONS_DIR}/fit/fit.js ${XTERM_TARGET_DIR}/fit.js
 
+echo "Tweaking CSS"
+cd src
+../../tweak-xterm-css.R
+echo "xterm.css adjusted. Be sure to rebuild Ace themes if necessary (compile-themes.R)."
 echo Done!
-

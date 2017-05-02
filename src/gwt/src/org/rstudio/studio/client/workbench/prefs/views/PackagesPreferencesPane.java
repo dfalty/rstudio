@@ -1,7 +1,7 @@
 /*
  * PackagesPreferencesPane.java
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -27,6 +27,7 @@ import com.google.gwt.user.client.ui.HorizontalPanel;
 import com.google.inject.Inject;
 
 import org.rstudio.core.client.BrowseCap;
+import org.rstudio.core.client.resources.ImageResource2x;
 import org.rstudio.core.client.widget.MessageDialog;
 import org.rstudio.core.client.widget.OperationWithInput;
 import org.rstudio.core.client.widget.TextBoxWithButton;
@@ -92,7 +93,6 @@ public class PackagesPreferencesPane extends PreferencesPane
       });
       if (!session.getSessionInfo().getDisablePackages())
       {
-         lessSpaced(chkEnablePackages);
          add(chkEnablePackages);
       }
       
@@ -164,7 +164,7 @@ public class PackagesPreferencesPane extends PreferencesPane
    @Override
    public ImageResource getIcon()
    {
-      return res_.iconPackages();
+      return new ImageResource2x(res_.iconPackages2x());
    }
 
    @Override

@@ -261,6 +261,7 @@ public class EnvironmentObjectGrid extends EnvironmentObjectDisplay
          {
             TableCellBuilder selectAll = row.startTH();
             selectAll.className(style_.objectGridHeader() + " " +
+                                "rstudio-themes-background" + " " +
                                 style_.checkColumn());
             renderHeader(selectAll, new Cell.Context(0, 0, null), checkHeader_);
             selectAll.end();
@@ -269,9 +270,15 @@ public class EnvironmentObjectGrid extends EnvironmentObjectDisplay
          // Render a header for each column
          for (int i = 0; i < columns_.size(); i++)
          {
+            String sortClassName = i == host_.getSortColumn() ? 
+              (host_.getAscendingSort() ? "dataGridSortedHeaderAscending" : "dataGridSortedHeaderDescending") : 
+              "";
+
             ObjectGridColumn col = columns_.get(i);
             TableCellBuilder cell = row.startTH();
-            cell.className(style_.objectGridHeader());
+            cell.className(style_.objectGridHeader() + " " +
+                           "rstudio-themes-background" + " " +
+                           sortClassName);
             Cell.Context context = new Cell.Context(0, i, null);
             renderSortableHeader(cell, context, col.getHeader(), 
                   i == host_.getSortColumn(), 
@@ -340,17 +347,29 @@ public class EnvironmentObjectGrid extends EnvironmentObjectDisplay
             if (col.getType() == ObjectGridColumn.COLUMN_VALUE)
             {
                className += " " + style_.valueColumn();
-               if (host_.enableClickableObjects() &&
-                   (rowValue.getCategory() == Categories.Data ||
-                    rowValue.getCategory() == Categories.Function))
+               boolean isClickable =
+                     host_.enableClickableObjects() &&
+                     rowValue.getCategory() != Categories.Value;
+               if (isClickable)
                {
-                  className += " " + style_.decoratedValueCol() +
-                               " " +
-                               (rowValue.getCategory() == Categories.Function ?
-                               ThemeStyles.INSTANCE.environmentFunctionCol () :
-                               ThemeStyles.INSTANCE.environmentDataFrameCol()) +
-                               "  " +
-                               ThemeStyles.INSTANCE.handCursor();
+                  className += " " + style_.decoratedValueCol();
+                  
+                  switch (rowValue.getCategory())
+                  {
+                  case Categories.Function:
+                     className += " " + ThemeStyles.INSTANCE.environmentFunctionCol();
+                     break;
+                  case Categories.Data:
+                     if (rowValue.isHierarchical())
+                        className += " " + ThemeStyles.INSTANCE.environmentHierarchicalCol();
+                     else
+                        className += " " + ThemeStyles.INSTANCE.environmentDataFrameCol();
+                     break;
+                  default:
+                        // no styling
+                  }
+                  
+                  className += " " + ThemeStyles.INSTANCE.handCursor();
                }
                if (rowValue.isPromise())
                {

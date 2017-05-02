@@ -1,7 +1,7 @@
 /*
  * Console.java
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -47,6 +47,7 @@ public class Console
       void focus();
       void ensureCursorVisible();
       IsWidget getConsoleInterruptButton();
+      IsWidget getConsoleClearButton();
       IsWidget getProfilerInterruptButton();
       void setDebugMode(boolean debugMode);
       void setProfilerMode(boolean profilerMode);
@@ -77,7 +78,9 @@ public class Console
          public void onBusy(BusyEvent event)
          {
             if (event.isBusy())
+            {
                interruptFadeInHelper_.beginShow();
+            }
          }
       });
       
@@ -133,13 +136,13 @@ public class Console
          }
       });
    }
-
+   
    @Handler
    void onActivateConsole()
    {
       activateConsole(true);
    }
-   
+
    private void activateConsole(boolean focusWindow)
    {
       // ensure we don't leave focus in the console

@@ -49,7 +49,10 @@ core::shell_utils::ShellCommand shellCommandForEngine(
    // determine engine path -- respect chunk option 'engine.path' if supplied
    std::string enginePath = engine;
    if (options.count("engine.path"))
-      enginePath = options.at("engine.path");
+   {
+      std::string path = options.at("engine.path");
+      enginePath = module_context::resolveAliasedPath(path).absolutePath();
+   }
    
    ShellCommand command(enginePath);
    
@@ -195,11 +198,19 @@ private:
       FilePath target = chunkOutputFile(docId_, chunkId_, nbCtxId_,
             ChunkOutputText);
       
-      // append console data
+      // append console data (for notebook cache)
       notebook::appendConsoleOutput(
                outputType == OUTPUT_STDOUT ? kChunkConsoleOutput : kChunkConsoleError,
                output,
                target);
+      
+      // write to temporary file (for streaming output)
+      FilePath tempFile = module_context::tempFile("chunk-output-", "");
+      RemoveOnExitScope scope(tempFile, ERROR_LOCATION);
+      notebook::appendConsoleOutput(
+               outputType == OUTPUT_STDOUT ? kChunkConsoleOutput : kChunkConsoleError,
+               output,
+               tempFile);
       
       // emit client event
       enqueueChunkOutput(
@@ -208,7 +219,7 @@ private:
                nbCtxId_,
                0,  // no ordinals needed for alternate engines
                ChunkOutputText,
-               target);
+               tempFile);
    }
    
 public:
@@ -302,6 +313,41 @@ core::Error runChunk(const std::string& docId,
    // generate process options
    core::system::ProcessOptions options;
    options.terminateChildren = true;
+   
+   core::system::Options env;
+   core::system::environment(&env);
+   
+   // if we're using python in a virtual environment, then
+   // set the VIRTUAL_ENV + PATH environment variables appropriately
+   if (engine == "python")
+   {
+      // determine engine path -- respect chunk option 'engine.path' if supplied
+      FilePath enginePath;
+      if (chunkOptions.count("engine.path"))
+      {
+         enginePath = module_context::resolveAliasedPath(chunkOptions.at("engine.path"));
+      }
+      else
+      {
+         core::system::realPath(engine, &enginePath);
+      }
+      
+      // if we discovered the engine path, then look for an 'activate' script
+      // in the same directory -- if it exists, this is a virtual env
+      if (enginePath.exists())
+      {
+         FilePath activatePath = enginePath.parent().childPath("activate");
+         if (activatePath.exists())
+         {
+            FilePath binPath = enginePath.parent();
+            FilePath venvPath = binPath.parent();
+            core::system::setenv(&env, "VIRTUAL_ENV", venvPath.absolutePath());
+            core::system::addToPath(&env, binPath.absolutePath(), true);
+         }
+      }
+   }
+   
+   options.environment = env;
    
    // run it
    error = module_context::processSupervisor().runCommand(

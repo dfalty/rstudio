@@ -19,7 +19,9 @@ import com.google.inject.Singleton;
 
 import org.rstudio.core.client.command.CommandBinder;
 import org.rstudio.core.client.command.Handler;
+import org.rstudio.core.client.dom.WindowEx;
 import org.rstudio.studio.client.application.events.EventBus;
+import org.rstudio.studio.client.common.satellite.Satellite;
 import org.rstudio.studio.client.workbench.commands.Commands;
 import org.rstudio.studio.client.workbench.views.source.editors.text.ace.AceEditorCommandEvent.CommandType;
 import org.rstudio.studio.client.workbench.views.source.editors.text.ace.AceEditorCommandEvent.ExecutionPolicy;
@@ -88,11 +90,56 @@ public class AceEditorCommandDispatcher
             ExecutionPolicy.FOCUSED);
    }
    
+   @Handler
+   public void onJumpToMatching()
+   {
+      fireEvent(
+            AceEditorCommandEvent.CommandType.JUMP_TO_MATCHING,
+            ExecutionPolicy.FOCUSED);
+   }
+   
+   @Handler
+   public void onSelectToMatching()
+   {
+      fireEvent(
+            AceEditorCommandEvent.CommandType.SELECT_TO_MATCHING,
+            ExecutionPolicy.FOCUSED);
+   }
+   
+   @Handler
+   public void onExpandToMatching()
+   {
+      fireEvent(
+            AceEditorCommandEvent.CommandType.EXPAND_TO_MATCHING,
+            ExecutionPolicy.FOCUSED);
+   }
+   
+   @Handler
+   public void onAddCursorAbove()
+   {
+      fireEvent(
+            AceEditorCommandEvent.CommandType.ADD_CURSOR_ABOVE,
+            ExecutionPolicy.FOCUSED);
+   }
+   
+   @Handler
+   public void onAddCursorBelow()
+   {
+      fireEvent(
+            AceEditorCommandEvent.CommandType.ADD_CURSOR_BELOW,
+            ExecutionPolicy.FOCUSED);
+   }
+   
+   
    // Private methods ----
    
    private void fireEvent(CommandType type, ExecutionPolicy policy)
    {
-      events_.fireEvent(new AceEditorCommandEvent(type, policy));
+      AceEditorCommandEvent event = new AceEditorCommandEvent(type, policy);
+      if (Satellite.isCurrentWindowSatellite())
+         events_.fireEventToSatellite(event, WindowEx.get());
+      else
+         events_.fireEvent(event);
    }
    
    // Private fields ----

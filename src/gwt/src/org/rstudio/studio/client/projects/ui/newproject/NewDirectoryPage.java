@@ -15,6 +15,7 @@
 package org.rstudio.studio.client.projects.ui.newproject;
 
 import org.rstudio.core.client.files.FileSystemItem;
+import org.rstudio.core.client.resources.ImageResource2x;
 import org.rstudio.core.client.widget.DirectoryChooserTextBox;
 import org.rstudio.core.client.widget.MessageDialog;
 import org.rstudio.studio.client.RStudioGinjector;
@@ -23,6 +24,7 @@ import org.rstudio.studio.client.projects.model.NewPackageOptions;
 import org.rstudio.studio.client.projects.model.NewProjectInput;
 import org.rstudio.studio.client.projects.model.NewProjectResult;
 import org.rstudio.studio.client.projects.model.NewShinyAppOptions;
+import org.rstudio.studio.client.projects.model.ProjectTemplateOptions;
 import org.rstudio.studio.client.workbench.model.SessionInfo;
 import org.rstudio.studio.client.workbench.prefs.model.UIPrefs;
 
@@ -39,11 +41,11 @@ public class NewDirectoryPage extends NewProjectWizardPage
 
    public NewDirectoryPage()
    {
-      this("Empty Project", 
+      this("New Project", 
            "Create a new project in an empty directory",
            "Create New Project",
-           NewProjectResources.INSTANCE.newProjectDirectoryIcon(),
-           NewProjectResources.INSTANCE.newProjectDirectoryIconLarge());
+           new ImageResource2x(NewProjectResources.INSTANCE.newProjectDirectoryIcon2x()),
+           new ImageResource2x(NewProjectResources.INSTANCE.newProjectDirectoryIconLarge2x()));
    }
    
    public NewDirectoryPage(String title, 
@@ -167,6 +169,11 @@ public class NewDirectoryPage extends NewProjectWizardPage
       return null;
    }
    
+   protected ProjectTemplateOptions getProjectTemplateOptions()
+   {
+      return null;
+   }
+   
    @Override 
    protected void initialize(NewProjectInput input)
    {
@@ -219,7 +226,9 @@ public class NewDirectoryPage extends NewProjectWizardPage
                                      chkPackratInit_.getValue(), 
                                      newDefaultLocation,
                                      null,
-                                     getNewPackageOptions(), getNewShinyAppOptions());
+                                     getNewPackageOptions(),
+                                     getNewShinyAppOptions(),
+                                     getProjectTemplateOptions());
       }
       else
       {
@@ -241,8 +250,8 @@ public class NewDirectoryPage extends NewProjectWizardPage
    
    protected Label dirNameLabel_;
    protected TextBox txtProjectName_;
-   private CheckBox chkGitInit_;
-   private CheckBox chkPackratInit_;
+   protected CheckBox chkGitInit_;
+   protected CheckBox chkPackratInit_;
    
    private DirectoryChooserTextBox newProjectParent_;
 

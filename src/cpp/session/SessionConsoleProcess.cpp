@@ -1,7 +1,7 @@
 /*
  * SessionConsoleProcess.cpp
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -15,18 +15,9 @@
 
 #include <session/SessionConsoleProcess.hpp>
 
-#include <boost/regex.hpp>
-#include <boost/foreach.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 
-#include <core/json/JsonRpc.hpp>
-#include <core/system/Process.hpp>
-#include <core/system/ShellUtils.hpp>
 #include <core/Exec.hpp>
-#include <core/SafeConvert.hpp>
-#include <core/Settings.hpp>
-
-#include <core/system/Environment.hpp>
 
 #include <session/SessionModuleContext.hpp>
 
@@ -43,37 +34,30 @@ namespace session {
 namespace console_process {
 
 namespace {
-   const size_t OUTPUT_BUFFER_SIZE = 8192;
    typedef std::map<std::string, boost::shared_ptr<ConsoleProcess> > ProcTable;
    ProcTable s_procs;
+   ConsoleProcessSocket s_terminalSocket;
 } // anonymous namespace
 
-const int kDefaultMaxOutputLines = 500;
+void saveConsoleProcesses();
 
-ConsoleProcess::ConsoleProcess()
-   : dialog_(false), showOnOutput_(false), interactionMode_(InteractionNever),
-     maxOutputLines_(kDefaultMaxOutputLines), started_(true),
-     interrupt_(false), newCols_(-1), newRows_(-1),
-     outputBuffer_(OUTPUT_BUFFER_SIZE)
+ConsoleProcess::ConsoleProcess(boost::shared_ptr<ConsoleProcessInfo> procInfo)
+   : procInfo_(procInfo), interrupt_(false), newCols_(-1), newRows_(-1),
+     childProcsSent_(false), lastInputSequence_(kIgnoreSequence), started_(false)
 {
    regexInit();
 
    // When we retrieve from outputBuffer, we only want complete lines. Add a
    // dummy \n so we can tell the first line is a complete line.
-   outputBuffer_.push_back('\n');
+   procInfo_->appendToOutputBuffer('\n');
 }
 
 ConsoleProcess::ConsoleProcess(const std::string& command,
                                const core::system::ProcessOptions& options,
-                               const std::string& caption,
-                               bool dialog,
-                               InteractionMode interactionMode,
-                               int maxOutputLines)
-   : command_(command), options_(options), caption_(caption), dialog_(dialog),
-     showOnOutput_(false),
-     interactionMode_(interactionMode), maxOutputLines_(maxOutputLines),
-     started_(false), interrupt_(false), newCols_(-1), newRows_(-1),
-     outputBuffer_(OUTPUT_BUFFER_SIZE)
+                               boost::shared_ptr<ConsoleProcessInfo> procInfo)
+   : command_(command), options_(options), procInfo_(procInfo),
+     interrupt_(false), newCols_(-1), newRows_(-1), childProcsSent_(false),
+     lastInputSequence_(kIgnoreSequence), started_(false)
 {
    commonInit();
 }
@@ -81,15 +65,10 @@ ConsoleProcess::ConsoleProcess(const std::string& command,
 ConsoleProcess::ConsoleProcess(const std::string& program,
                                const std::vector<std::string>& args,
                                const core::system::ProcessOptions& options,
-                               const std::string& caption,
-                               bool dialog,
-                               InteractionMode interactionMode,
-                               int maxOutputLines)
-   : program_(program), args_(args), options_(options), caption_(caption), dialog_(dialog),
-     showOnOutput_(false),
-     interactionMode_(interactionMode), maxOutputLines_(maxOutputLines),
-     started_(false),  interrupt_(false), newCols_(-1), newRows_(-1),
-     outputBuffer_(OUTPUT_BUFFER_SIZE)
+                               boost::shared_ptr<ConsoleProcessInfo> procInfo)
+   : program_(program), args_(args), options_(options), procInfo_(procInfo),
+     interrupt_(false), newCols_(-1), newRows_(-1), childProcsSent_(false),
+     lastInputSequence_(kIgnoreSequence), started_(false)
 {
    commonInit();
 }
@@ -103,8 +82,7 @@ void ConsoleProcess::regexInit()
 void ConsoleProcess::commonInit()
 {
    regexInit();
-
-   handle_ = core::system::generateUuid(false);
+   procInfo_->ensureHandle();
 
    // always redirect stderr to stdout so output is interleaved
    options_.redirectStdErrToStdOut = true;
@@ -114,13 +92,14 @@ void ConsoleProcess::commonInit()
 #ifdef _WIN32
       // NOTE: We use consoleio.exe here in order to make sure svn.exe password
       // prompting works properly
-      options_.createNewConsole = true;
 
       FilePath consoleIoPath = session::options().consoleIoPath();
 
       // if this is as runProgram then fixup the program and args
       if (!program_.empty())
       {
+         options_.createNewConsole = true;
+
          // build new args
          shell_utils::ShellArgs args;
          args << program_;
@@ -131,9 +110,31 @@ void ConsoleProcess::commonInit()
          args_ = args;
       }
       // if this is a runCommand then prepend consoleio.exe to the command
-      else
+      else if (!command_.empty())
       {
+         options_.createNewConsole = true;
          command_ = shell_utils::escape(consoleIoPath) + " " + command_;
+      }
+      else // terminal
+      {
+         // undefine TERM, as it puts git-bash in a mode that winpty doesn't
+         // support; was set in SessionMain.cpp::main to support color in
+         // the R Console
+         if (!options_.environment)
+         {
+            core::system::Options childEnv;
+            core::system::environment(&childEnv);
+            options_.environment = childEnv;
+         }
+         core::system::unsetenv(&(options_.environment.get()), "TERM");
+
+         // request a pseudoterminal if this is an interactive console process
+         options_.pseudoterminal = core::system::Pseudoterminal(
+                  session::options().winptyPath(),
+                  false /*plainText*/,
+                  false /*conerr*/,
+                  options_.cols,
+                  options_.rows);
       }
 #else
       // request a pseudoterminal if this is an interactive console process
@@ -150,27 +151,23 @@ void ConsoleProcess::commonInit()
       }
       
       core::system::setenv(&(options_.environment.get()), "TERM",
-                           options_.smartTerminal ? "xterm" : "dumb");
+                           options_.smartTerminal ? core::system::kSmartTerm :
+                                                    core::system::kDumbTerm);
 #endif
    }
 
 
    // When we retrieve from outputBuffer, we only want complete lines. Add a
    // dummy \n so we can tell the first line is a complete line.
-   outputBuffer_.push_back('\n');
+   procInfo_->appendToOutputBuffer('\n');
 }
 
 std::string ConsoleProcess::bufferedOutput() const
 {
-   boost::circular_buffer<char>::const_iterator pos =
-         std::find(outputBuffer_.begin(), outputBuffer_.end(), '\n');
+   if (options_.smartTerminal)
+      return "";
 
-   std::string result;
-   if (pos != outputBuffer_.end())
-      pos++;
-   std::copy(pos, outputBuffer_.end(), std::back_inserter(result));
-   // Will be empty if the buffer was overflowed by a single line
-   return result;
+   return procInfo_->bufferedOutput();
 }
 
 void ConsoleProcess::setPromptHandler(
@@ -190,10 +187,15 @@ Error ConsoleProcess::start()
       error = module_context::processSupervisor().runCommand(
                                  command_, options_, createProcessCallbacks());
    }
-   else
+   else if (!program_.empty())
    {
       error = module_context::processSupervisor().runProgram(
                           program_, args_, options_, createProcessCallbacks());
+   }
+   else
+   {
+      error = module_context::processSupervisor().runTerminal(
+                          options_, createProcessCallbacks());
    }
    if (!error)
       started_ = true;
@@ -202,7 +204,98 @@ Error ConsoleProcess::start()
 
 void ConsoleProcess::enqueInput(const Input& input)
 {
-   inputQueue_.push(input);
+   if (input.sequence == kIgnoreSequence)
+   {
+      inputQueue_.push_back(input);
+      return;
+   }
+
+   if (input.sequence == kFlushSequence)
+   {
+      inputQueue_.push_back(input);
+
+      // set everything in queue to "ignore" so it will be pulled from
+      // queue as-is, even with gaps
+      for (std::deque<Input>::iterator it = inputQueue_.begin();
+           it != inputQueue_.end(); it++)
+      {
+         (*it).sequence = kIgnoreSequence;
+      }
+      lastInputSequence_ = kIgnoreSequence;
+      return;
+   }
+
+   // insert in order by sequence
+   for (std::deque<Input>::iterator it = inputQueue_.begin();
+        it != inputQueue_.end(); it++)
+   {
+      if (input.sequence < (*it).sequence)
+      {
+         inputQueue_.insert(it, input);
+         return;
+      }
+   }
+   inputQueue_.push_back(input);
+}
+
+ConsoleProcess::Input ConsoleProcess::dequeInput()
+{
+   // Pull next available Input from queue; return an empty Input
+   // if none available or if an out-of-sequence entry is
+   // reached; assumption is the missing item(s) will eventually
+   // arrive and unblock the backlog.
+   if (inputQueue_.empty())
+      return Input();
+
+   Input input = inputQueue_.front();
+   if (input.sequence == kIgnoreSequence || input.sequence == kFlushSequence)
+   {
+      inputQueue_.pop_front();
+      return input;
+   }
+
+   if (input.sequence == lastInputSequence_ + 1)
+   {
+      lastInputSequence_++;
+      inputQueue_.pop_front();
+      return input;
+   }
+
+   // Getting here means input is out of sequence. We want to prevent
+   // getting permanently stuck if a message gets lost and the
+   // gap(s) never get filled in. So we'll flush it if input piles up.
+   if (inputQueue_.size() >= kAutoFlushLength)
+   {
+      // set everything in queue to "ignore" so it will be pulled from
+      // queue as-is, even with gaps
+      for (std::deque<Input>::iterator it = inputQueue_.begin();
+           it != inputQueue_.end(); it++)
+      {
+         lastInputSequence_ = (*it).sequence;
+         (*it).sequence = kIgnoreSequence;
+      }
+
+      input.sequence = kIgnoreSequence;
+      inputQueue_.pop_front();
+      return input;
+   }
+
+   return Input();
+}
+
+void ConsoleProcess::enquePromptEvent(const std::string& prompt)
+{
+   // enque a prompt event
+   json::Object data;
+   data["handle"] = handle();
+   data["prompt"] = prompt;
+   module_context::enqueClientEvent(
+         ClientEvent(client_events::kConsoleProcessPrompt, data));
+}
+
+void ConsoleProcess::enquePrompt(const std::string& prompt)
+{
+   enquePromptEvent(prompt);
 }
 
 void ConsoleProcess::interrupt()
@@ -222,40 +315,20 @@ bool ConsoleProcess::onContinue(core::system::ProcessOperations& ops)
    if (interrupt_)
       return false;
 
-   // process input queue
-   while (!inputQueue_.empty())
+
+   if (procInfo_->getChannelMode() == Rpc)
    {
-      // pop input
-      Input input = inputQueue_.front();
-      inputQueue_.pop();
-
-      // pty interrupt
-      if (input.interrupt)
+      processQueuedInput(ops);
+   }
+   else
+   {
+      // capture weak reference to the callbacks so websocket callback
+      // can use them
+      LOCK_MUTEX(mutex_)
       {
-         Error error = ops.ptyInterrupt();
-         if (error)
-            LOG_ERROR(error);
-
-         if (input.echoInput)
-            appendToOutputBuffer("^C");
+         pOps_ = ops.weak_from_this();
       }
-
-      // text input
-      else
-      {
-         std::string inputText = input.text;
-#ifdef _WIN32
-         string_utils::convertLineEndings(&inputText, string_utils::LineEndingWindows);
-#endif
-         Error error = ops.writeToStdin(inputText, false);
-         if (error)
-            LOG_ERROR(error);
-
-         if (input.echoInput)
-            appendToOutputBuffer(inputText);
-         else
-            appendToOutputBuffer("\n");
-      }
+      END_LOCK_MUTEX
    }
 
    if (newCols_ != -1 && newRows_ != -1)
@@ -269,25 +342,80 @@ bool ConsoleProcess::onContinue(core::system::ProcessOperations& ops)
    return true;
 }
 
-void ConsoleProcess::appendToOutputBuffer(const std::string &str)
+void ConsoleProcess::processQueuedInput(core::system::ProcessOperations& ops)
 {
-   std::copy(str.begin(), str.end(), std::back_inserter(outputBuffer_));
+   // process input queue
+   Input input = dequeInput();
+   while (!input.empty())
+   {
+      // pty interrupt
+      if (input.interrupt)
+      {
+         Error error = ops.ptyInterrupt();
+         if (error)
+            LOG_ERROR(error);
+
+         if (input.echoInput)
+            procInfo_->appendToOutputBuffer("^C");
+      }
+
+      // text input
+      else
+      {
+         std::string inputText = input.text;
+#ifdef _WIN32
+         if (!options_.smartTerminal)
+         {
+            string_utils::convertLineEndings(&inputText, string_utils::LineEndingWindows);
+         }
+#endif
+         Error error = ops.writeToStdin(inputText, false);
+         if (error)
+            LOG_ERROR(error);
+
+         if (!options_.smartTerminal) // smart terminal does echo via pty
+         {
+            if (input.echoInput)
+               procInfo_->appendToOutputBuffer(inputText);
+            else
+               procInfo_->appendToOutputBuffer("\n");
+         }
+      }
+
+      input = dequeInput();
+   }
 }
 
-void ConsoleProcess::enqueOutputEvent(const std::string &output, bool error)
+void ConsoleProcess::deleteLogFile() const
+{
+   procInfo_->deleteLogFile();
+}
+
+std::string ConsoleProcess::getSavedBufferChunk(int chunk, bool* pMoreAvailable) const
+{
+   return procInfo_->getSavedBufferChunk(chunk, pMoreAvailable);
+}
+
+void ConsoleProcess::enqueOutputEvent(const std::string &output)
 {
    // copy to output buffer
-   appendToOutputBuffer(output);
+   procInfo_->appendToOutputBuffer(output);
 
    // If there's more output than the client can even show, then
    // truncate it to the amount that the client can show. Too much
    // output can overwhelm the client, making it unresponsive.
    std::string trimmedOutput = output;
-   string_utils::trimLeadingLines(maxOutputLines_, &trimmedOutput);
+   string_utils::trimLeadingLines(procInfo_->getMaxOutputLines(), &trimmedOutput);
 
+   if (procInfo_->getChannelMode() == Websocket)
+   {
+      s_terminalSocket.sendText(procInfo_->getHandle(), output);
+      return;
+   }
+
+   // Rpc
    json::Object data;
-   data["handle"] = handle_;
-   data["error"] = error;
+   data["handle"] = handle();
    data["output"] = trimmedOutput;
    module_context::enqueClientEvent(
          ClientEvent(client_events::kConsoleProcessOutput, data));
@@ -298,9 +426,7 @@ void ConsoleProcess::onStdout(core::system::ProcessOperations& ops,
 {
    if (options_.smartTerminal)
    {
-      // TODO: consider extracting out behaviors that vary between smart
-      // and dumb terminal handlers
-      enqueOutputEvent(output, false);
+      enqueOutputEvent(output);
       return;
    }
    
@@ -312,7 +438,7 @@ void ConsoleProcess::onStdout(core::system::ProcessOperations& ops,
    // process as normal output or detect a prompt if there is one
    if (boost::algorithm::ends_with(posixOutput, "\n"))
    {
-      enqueOutputEvent(posixOutput, false);
+      enqueOutputEvent(posixOutput);
    }
    else
    {
@@ -321,7 +447,7 @@ void ConsoleProcess::onStdout(core::system::ProcessOperations& ops,
       std::size_t lastLoc = posixOutput.find_last_of("\n\f");
       if (lastLoc != std::string::npos)
       {
-         enqueOutputEvent(posixOutput.substr(0, lastLoc), false);
+         enqueOutputEvent(posixOutput.substr(0, lastLoc));
          maybeConsolePrompt(ops, posixOutput.substr(lastLoc + 1));
       }
       else
@@ -337,12 +463,12 @@ void ConsoleProcess::maybeConsolePrompt(core::system::ProcessOperations& ops,
    boost::smatch smatch;
 
    // treat special control characters as output rather than a prompt
-   if (boost::regex_search(output, smatch, controlCharsPattern_))
-      enqueOutputEvent(output, false);
+   if (regex_utils::search(output, smatch, controlCharsPattern_))
+      enqueOutputEvent(output);
 
    // make sure the output matches our prompt pattern
-   if (!boost::regex_match(output, smatch, promptPattern_))
-      enqueOutputEvent(output, false);
+   if (!regex_utils::match(output, smatch, promptPattern_))
+      enqueOutputEvent(output);
 
    // it is a prompt
    else
@@ -372,23 +498,17 @@ void ConsoleProcess::handleConsolePrompt(core::system::ProcessOperations& ops,
 
          return;
       }
-
    }
-
-   // enque a prompt event
-   json::Object data;
-   data["handle"] = handle_;
-   data["prompt"] = prompt;
-   module_context::enqueClientEvent(
-         ClientEvent(client_events::kConsoleProcessPrompt, data));
+   
+   enquePromptEvent(prompt);
 }
 
 void ConsoleProcess::onExit(int exitCode)
 {
-   exitCode_.reset(exitCode);
+   procInfo_->setExitCode(exitCode);
 
    json::Object data;
-   data["handle"] = handle_;
+   data["handle"] = handle();
    data["exitCode"] = exitCode;
    module_context::enqueClientEvent(
          ClientEvent(client_events::kConsoleProcessExit, data));
@@ -396,58 +516,37 @@ void ConsoleProcess::onExit(int exitCode)
    onExit_(exitCode);
 }
 
+void ConsoleProcess::onHasSubprocs(bool hasSubprocs)
+{
+   if (hasSubprocs != procInfo_->getHasChildProcs() || !childProcsSent_)
+   {
+      procInfo_->setHasChildProcs(hasSubprocs);
+
+      json::Object subProcs;
+      subProcs["handle"] = handle();
+      subProcs["subprocs"] = procInfo_->getHasChildProcs();
+      module_context::enqueClientEvent(
+            ClientEvent(client_events::kTerminalSubprocs, subProcs));
+      childProcsSent_ = true;
+   }
+}
+
+void ConsoleProcess::setRpcMode()
+{
+   s_terminalSocket.stopListening(handle());
+   procInfo_->setChannelMode(Rpc, "");
+}
+
 core::json::Object ConsoleProcess::toJson() const
 {
-   json::Object result;
-   result["handle"] = handle_;
-   result["caption"] = caption_;
-   result["dialog"] = dialog_;
-   result["show_on_output"] = showOnOutput_;
-   result["interaction_mode"] = static_cast<int>(interactionMode_);
-   result["max_output_lines"] = maxOutputLines_;
-   result["buffered_output"] = bufferedOutput();
-   if (exitCode_)
-      result["exit_code"] = *exitCode_;
-   else
-      result["exit_code"] = json::Value();
-   return result;
+   return procInfo_->toJson();
 }
 
 boost::shared_ptr<ConsoleProcess> ConsoleProcess::fromJson(
                                              core::json::Object &obj)
 {
-   boost::shared_ptr<ConsoleProcess> pProc(new ConsoleProcess());
-   pProc->handle_ = obj["handle"].get_str();
-   pProc->caption_ = obj["caption"].get_str();
-   pProc->dialog_ = obj["dialog"].get_bool();
-
-   json::Value showOnOutput = obj["show_on_output"];
-   if (!showOnOutput.is_null())
-      pProc->showOnOutput_ = showOnOutput.get_bool();
-   else
-      pProc->showOnOutput_ = false;
-
-   json::Value mode = obj["interaction_mode"];
-   if (!mode.is_null())
-      pProc->interactionMode_ = static_cast<InteractionMode>(mode.get_int());
-   else
-      pProc->interactionMode_ = InteractionNever;
-
-   json::Value maxLines = obj["max_output_lines"];
-   if (!maxLines.is_null())
-      pProc->maxOutputLines_ = maxLines.get_int();
-   else
-      pProc->maxOutputLines_ = kDefaultMaxOutputLines;
-
-   std::string bufferedOutput = obj["buffered_output"].get_str();
-   std::copy(bufferedOutput.begin(), bufferedOutput.end(),
-             std::back_inserter(pProc->outputBuffer_));
-   json::Value exitCode = obj["exit_code"];
-   if (exitCode.is_null())
-      pProc->exitCode_.reset();
-   else
-      pProc->exitCode_.reset(exitCode.get_int());
-
+   boost::shared_ptr<ConsoleProcessInfo> pProcInfo(ConsoleProcessInfo::fromJson(obj));
+   boost::shared_ptr<ConsoleProcess> pProc(new ConsoleProcess(pProcInfo));
    return pProc;
 }
 
@@ -457,6 +556,10 @@ core::system::ProcessCallbacks ConsoleProcess::createProcessCallbacks()
    cb.onContinue = boost::bind(&ConsoleProcess::onContinue, ConsoleProcess::shared_from_this(), _1);
    cb.onStdout = boost::bind(&ConsoleProcess::onStdout, ConsoleProcess::shared_from_this(), _1, _2);
    cb.onExit = boost::bind(&ConsoleProcess::onExit, ConsoleProcess::shared_from_this(), _1);
+   if (options_.reportHasSubprocs)
+   {
+      cb.onHasSubprocs = boost::bind(&ConsoleProcess::onHasSubprocs, ConsoleProcess::shared_from_this(), _1);
+   }
    return cb;
 }
 
@@ -507,15 +610,19 @@ Error procReap(const json::JsonRpcRequest& request,
    if (error)
       return error;
 
-   if (!s_procs.erase(handle))
+   ProcTable::const_iterator pos = s_procs.find(handle);
+   if (pos != s_procs.end())
    {
-      return systemError(boost::system::errc::invalid_argument,
-                         ERROR_LOCATION);
+      pos->second->deleteLogFile();
+      if (s_procs.erase(handle))
+      {
+         saveConsoleProcesses();
+         return Success();
+      }
    }
-   else
-   {
-      return Success();
-   }
+   
+   return systemError(boost::system::errc::invalid_argument,
+                      ERROR_LOCATION);
 }
 
 Error procWriteStdin(const json::JsonRpcRequest& request,
@@ -528,6 +635,7 @@ Error procWriteStdin(const json::JsonRpcRequest& request,
 
    ConsoleProcess::Input input;
    error = json::readObjectParam(request.params, 1,
+                                 "sequence", &input.sequence,
                                  "interrupt", &input.interrupt,
                                  "text", &input.text,
                                  "echo_input", &input.echoInput);
@@ -537,21 +645,7 @@ Error procWriteStdin(const json::JsonRpcRequest& request,
    ProcTable::const_iterator pos = s_procs.find(handle);
    if (pos != s_procs.end())
    {
-#ifdef RSTUDIO_SERVER
-      if (session::options().programMode() == kSessionProgramModeServer)
-      {
-         if (!input.interrupt)
-         {
-            error = core::system::crypto::rsaPrivateDecrypt(input.text,
-                                                            &input.text);
-            if (error)
-               return error;
-         }
-      }
-#endif
-
       pos->second->enqueInput(input);
-
       return Success();
    }
    else
@@ -586,24 +680,132 @@ Error procSetSize(const json::JsonRpcRequest& request,
                          ERROR_LOCATION);
    }
 }
+
+Error procSetCaption(const json::JsonRpcRequest& request,
+                           json::JsonRpcResponse* pResponse)
+{
+   std::string handle;
+   std::string caption;
    
+   Error error = json::readParams(request.params,
+                                  &handle,
+                                  &caption);
+   if (error)
+      return error;
+   
+   ProcTable::const_iterator pos = s_procs.find(handle);
+   if (pos == s_procs.end())
+   {
+      return systemError(boost::system::errc::invalid_argument, ERROR_LOCATION);
+   }
+   
+   pos->second->setCaption(caption);
+   saveConsoleProcesses();
+   return Success();
+}
+
+Error procSetTitle(const json::JsonRpcRequest& request,
+                         json::JsonRpcResponse* pResponse)
+{
+   std::string handle;
+   std::string title;
+   
+   Error error = json::readParams(request.params,
+                                  &handle,
+                                  &title);
+   if (error)
+      return error;
+   
+   ProcTable::const_iterator pos = s_procs.find(handle);
+   if (pos == s_procs.end())
+   {
+      return systemError(boost::system::errc::invalid_argument, ERROR_LOCATION);
+   }
+   
+   pos->second->setTitle(title);
+   return Success();
+}
+
+Error procEraseBuffer(const json::JsonRpcRequest& request,
+                      json::JsonRpcResponse* pResponse)
+{
+   std::string handle;
+
+   Error error = json::readParams(request.params,
+                                  &handle);
+   if (error)
+      return error;
+
+   ProcTable::const_iterator pos = s_procs.find(handle);
+   if (pos == s_procs.end())
+   {
+      return systemError(boost::system::errc::invalid_argument, ERROR_LOCATION);
+   }
+
+   pos->second->deleteLogFile();
+   return Success();
+}
+
+Error procGetBufferChunk(const json::JsonRpcRequest& request,
+                         json::JsonRpcResponse* pResponse)
+{
+   std::string handle;
+   int requestedChunk;
+
+   Error error = json::readParams(request.params,
+                                  &handle,
+                                  &requestedChunk);
+   if (error)
+      return error;
+   if (requestedChunk < 0)
+      return systemError(boost::system::errc::invalid_argument, ERROR_LOCATION);
+
+   ProcTable::const_iterator pos = s_procs.find(handle);
+   if (pos == s_procs.end())
+      return systemError(boost::system::errc::invalid_argument, ERROR_LOCATION);
+
+   json::Object result;
+   bool moreAvailable;
+   std::string chunkContent = pos->second->getSavedBufferChunk(
+            requestedChunk, &moreAvailable);
+
+   result["chunk"] = chunkContent;
+   result["chunk_number"] = requestedChunk;
+   result["more_available"] = moreAvailable;
+   pResponse->setResult(result);
+
+   return Success();
+}
+
+Error procUseRpc(const json::JsonRpcRequest& request,
+                 json::JsonRpcResponse* pResponse)
+{
+   std::string handle;
+
+   Error error = json::readParams(request.params,
+                                  &handle);
+   if (error)
+      return error;
+
+   ProcTable::const_iterator pos = s_procs.find(handle);
+   if (pos == s_procs.end())
+      return systemError(boost::system::errc::invalid_argument, ERROR_LOCATION);
+
+   // Used to downgrade to Rpc after client was unable to connect to Websocket
+   pos->second->setRpcMode();
+   return Success();
+}
+
 boost::shared_ptr<ConsoleProcess> ConsoleProcess::create(
       const std::string& command,
       core::system::ProcessOptions options,
-      const std::string& caption,
-      bool dialog,
-      InteractionMode interactionMode,
-      int maxOutputLines)
+      boost::shared_ptr<ConsoleProcessInfo> procInfo)
 {
    options.terminateChildren = true;
    boost::shared_ptr<ConsoleProcess> ptrProc(
-         new ConsoleProcess(command,
-                            options,
-                            caption,
-                            dialog,
-                            interactionMode,
-                            maxOutputLines));
+         new ConsoleProcess(command, options, procInfo));
    s_procs[ptrProc->handle()] = ptrProc;
+   saveConsoleProcesses();
    return ptrProc;
 }
 
@@ -611,22 +813,122 @@ boost::shared_ptr<ConsoleProcess> ConsoleProcess::create(
       const std::string& program,
       const std::vector<std::string>& args,
       core::system::ProcessOptions options,
-      const std::string& caption,
-      bool dialog,
-      InteractionMode interactionMode,
-      int maxOutputLines)
+      boost::shared_ptr<ConsoleProcessInfo> procInfo)
 {
    options.terminateChildren = true;
    boost::shared_ptr<ConsoleProcess> ptrProc(
-         new ConsoleProcess(program,
-                            args,
-                            options,
-                            caption,
-                            dialog,
-                            interactionMode,
-                            maxOutputLines));
+         new ConsoleProcess(program, args, options, procInfo));
    s_procs[ptrProc->handle()] = ptrProc;
+   saveConsoleProcesses();
    return ptrProc;
+}
+
+// supports reattaching to a running process, or creating a new process with
+// previously used handle
+boost::shared_ptr<ConsoleProcess> ConsoleProcess::createTerminalProcess(
+      core::system::ProcessOptions options,
+      boost::shared_ptr<ConsoleProcessInfo> procInfo,
+      bool enableWebsockets)
+{
+   boost::shared_ptr<ConsoleProcess> cp;
+
+   // Use websocket as preferred communication channel; it can fail
+   // here if unable to establish the server-side of things, in which case
+   // fallback to using Rpc.
+   //
+   // It can also fail later when client tries to connect; fallback for that
+   // happens from the client-side via RPC call procUseRpc.
+   if (enableWebsockets)
+   {
+      Error error = s_terminalSocket.ensureServerRunning();
+      if (error)
+      {
+         procInfo->setChannelMode(Rpc, "");
+         LOG_ERROR(error);
+      }
+      else
+      {
+         std::string port = safe_convert::numberToString(s_terminalSocket.port());
+         procInfo->setChannelMode(Websocket, port);
+      }
+   }
+   else
+   {
+      procInfo->setChannelMode(Rpc, "");
+   }
+
+   std::string command;
+   if (procInfo->getAllowRestart() && !procInfo->getHandle().empty())
+   {
+      // return existing ConsoleProcess if it is still running
+      ProcTable::const_iterator pos = s_procs.find(procInfo->getHandle());
+      if (pos != s_procs.end() && pos->second->isStarted())
+      {
+         // Jiggle the size of the pseudo-terminal, this will force the app
+         // to refresh itself; this does rely on the host performing a second
+         // resize to the actual available size. Clumsy, but so far this is
+         // the best I've come up with.
+         cp = pos->second;
+         cp->resize(25, 5);
+      }
+      else
+      {
+         // Create new process with previously used handle
+         options.terminateChildren = true;
+         cp.reset(new ConsoleProcess(command, options, procInfo));
+         s_procs[cp->handle()] = cp;
+         saveConsoleProcesses();
+      }
+   }
+   else
+   {
+      // otherwise create a new one
+      cp =  create(command, options, procInfo);
+   }
+
+   if (cp->procInfo_->getChannelMode() == Websocket)
+   {
+      // start watching for websocket callbacks
+      s_terminalSocket.listen(cp->procInfo_->getHandle(),
+                              cp->createConsoleProcessSocketConnectionCallbacks());
+   }
+   return cp;
+}
+
+ConsoleProcessSocketConnectionCallbacks ConsoleProcess::createConsoleProcessSocketConnectionCallbacks()
+{
+   ConsoleProcessSocketConnectionCallbacks cb;
+   cb.onReceivedInput = boost::bind(&ConsoleProcess::onReceivedInput, ConsoleProcess::shared_from_this(), _1);
+   cb.onConnectionOpened = boost::bind(&ConsoleProcess::onConnectionOpened, ConsoleProcess::shared_from_this());
+   cb.onConnectionClosed = boost::bind(&ConsoleProcess::onConnectionClosed, ConsoleProcess::shared_from_this());
+   return cb;
+}
+
+// received input from websocket (e.g. user typing on client); called on
+// different thread
+void ConsoleProcess::onReceivedInput(const std::string& input)
+{
+   LOCK_MUTEX(mutex_)
+   {
+      enqueInput(Input(input));
+      boost::shared_ptr<core::system::ProcessOperations> ops = pOps_.lock();
+      if (ops)
+      {
+         processQueuedInput(*ops);
+      }
+   }
+   END_LOCK_MUTEX
+}
+
+// websocket connection closed; called on different thread
+void ConsoleProcess::onConnectionClosed()
+{
+   s_terminalSocket.stopListening(handle());
+}
+
+// websocket connection opened; called on different thread
+void ConsoleProcess::onConnectionOpened()
+{
 }
 
 void PasswordManager::attach(
@@ -653,7 +955,7 @@ bool PasswordManager::handlePrompt(const std::string& cpHandle,
 {
    // is this a password prompt?
    boost::smatch match;
-   if (boost::regex_match(prompt, match, promptPattern_))
+   if (regex_utils::match(prompt, match, promptPattern_))
    {
       // see if it matches any of our existing cached passwords
       std::vector<CachedPassword>::const_iterator it =
@@ -757,7 +1059,7 @@ core::json::Array processesAsJson()
    return procInfos;
 }
 
-void onSuspend(core::Settings* pSettings)
+std::string serializeConsoleProcs()
 {
    json::Array array;
    for (ProcTable::const_iterator it = s_procs.begin();
@@ -769,18 +1071,19 @@ void onSuspend(core::Settings* pSettings)
 
    std::ostringstream ostr;
    json::write(array, ostr);
-   pSettings->set("console_procs", ostr.str());
+   return ostr.str();
 }
-
-void onResume(const core::Settings& settings)
+   
+void deserializeConsoleProcs(const std::string& jsonStr)
 {
-   std::string strVal = settings.get("console_procs");
-   if (strVal.empty())
+   if (jsonStr.empty())
       return;
-
    json::Value value;
-   if (!json::parse(strVal, &value))
+   if (!json::parse(jsonStr, &value))
+   {
+      LOG_WARNING_MESSAGE("invalid console process json: " + jsonStr);
       return;
+   }
 
    json::Array procs = value.get_array();
    for (json::Array::iterator it = procs.begin();
@@ -789,8 +1092,54 @@ void onResume(const core::Settings& settings)
    {
       boost::shared_ptr<ConsoleProcess> proc =
                                     ConsoleProcess::fromJson(it->get_obj());
+
+      // Deserializing consoleprocs list only happens during session
+      // initialization, therefore they do not represent an actual running
+      // async process, therefore are not busy. Mark as such, otherwise we
+      // can get false "busy" indications on the client after a restart, for
+      // example if a session was closed with busy terminal(s), then
+      // restarted. This is not hit if reconnecting to a still-running
+      // session.
+      proc->setNotBusy();
+
       s_procs[proc->handle()] = proc;
    }
+}
+
+bool isKnownProcHandle(const std::string& handle)
+{
+   ProcTable::const_iterator pos = s_procs.find(handle);
+   return pos != s_procs.end();
+}
+
+void loadConsoleProcesses()
+{
+   std::string contents = ConsoleProcessInfo::loadConsoleProcessMetadata();
+   if (contents.empty())
+      return;
+   deserializeConsoleProcs(contents);
+   ConsoleProcessInfo::deleteOrphanedLogs(isKnownProcHandle);
+}
+
+void saveConsoleProcessesAtShutdown(bool terminatedNormally)
+{
+   if (!terminatedNormally)
+      return;
+   saveConsoleProcesses();
+}
+
+void saveConsoleProcesses()
+{
+   ConsoleProcessInfo::saveConsoleProcesses(serializeConsoleProcs());
+}
+   
+void onSuspend(core::Settings* /*pSettings*/)
+{
+   serializeConsoleProcs();
+}
+
+void onResume(const core::Settings& /*settings*/)
+{
 }
 
 Error initialize()
@@ -798,8 +1147,10 @@ Error initialize()
    using boost::bind;
    using namespace module_context;
 
-   // add suspend/resume handler
+   events().onShutdown.connect(saveConsoleProcessesAtShutdown);
    addSuspendHandler(SuspendHandler(boost::bind(onSuspend, _2), onResume));
+
+   loadConsoleProcesses();
 
    // install rpc methods
    ExecBlock initBlock ;
@@ -808,7 +1159,12 @@ Error initialize()
       (bind(registerRpcMethod, "process_interrupt", procInterrupt))
       (bind(registerRpcMethod, "process_reap", procReap))
       (bind(registerRpcMethod, "process_write_stdin", procWriteStdin))
-      (bind(registerRpcMethod, "process_set_size", procSetSize));
+      (bind(registerRpcMethod, "process_set_size", procSetSize))
+      (bind(registerRpcMethod, "process_set_caption", procSetCaption))
+      (bind(registerRpcMethod, "process_set_title", procSetTitle))
+      (bind(registerRpcMethod, "process_erase_buffer", procEraseBuffer))
+      (bind(registerRpcMethod, "process_get_buffer_chunk", procGetBufferChunk))
+      (bind(registerRpcMethod, "process_use_rpc", procUseRpc));
 
    return initBlock.execute();
 }

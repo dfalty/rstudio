@@ -95,6 +95,7 @@ import org.rstudio.studio.client.rmarkdown.events.RmdOutputFormatChangedEvent;
 import org.rstudio.studio.client.rmarkdown.events.RmdRenderPendingEvent;
 import org.rstudio.studio.client.rmarkdown.model.NotebookQueueUnit;
 import org.rstudio.studio.client.rmarkdown.model.RMarkdownContext;
+import org.rstudio.studio.client.rmarkdown.model.RmdEditorOptions;
 import org.rstudio.studio.client.rmarkdown.model.RmdFrontMatter;
 import org.rstudio.studio.client.rmarkdown.model.RmdFrontMatterOutputOptions;
 import org.rstudio.studio.client.rmarkdown.model.RmdOutputFormat;
@@ -1540,6 +1541,58 @@ public class TextEditingTarget implements
          }
       });
       
+      docDisplay_.addCursorChangedHandler(new CursorChangedHandler()
+      {
+         Timer timer_ = new Timer()
+         {
+            @Override
+            public void run()
+            {
+               HashMap<String, String> properties = new HashMap<String, String>();
+               
+               properties.put(
+                     PROPERTY_CURSOR_POSITION,
+                     Position.serialize(docDisplay_.getCursorPosition()));
+               
+               properties.put(
+                     PROPERTY_SCROLL_LINE,
+                     String.valueOf(docDisplay_.getFirstFullyVisibleRow()));
+               
+               docUpdateSentinel_.modifyProperties(properties);
+            }
+         };
+         
+         @Override
+         public void onCursorChanged(CursorChangedEvent event)
+         {
+            timer_.schedule(1000);
+         }
+      });
+      
+      Scheduler.get().scheduleDeferred(new ScheduledCommand()
+      {
+         @Override
+         public void execute()
+         {
+            String cursorPosition = docUpdateSentinel_.getProperty(
+                  PROPERTY_CURSOR_POSITION,
+                  "");
+            
+            if (StringUtil.isNullOrEmpty(cursorPosition))
+               return;
+            
+            
+            int scrollLine = StringUtil.parseInt(
+                  docUpdateSentinel_.getProperty(PROPERTY_SCROLL_LINE, "0"),
+                  0);
+            
+            Position position = Position.deserialize(cursorPosition);
+            docDisplay_.setCursorPosition(position);
+            docDisplay_.scrollToLine(scrollLine, false);
+            docDisplay_.setScrollLeft(0);
+         }
+      });
+      
       syncPublishPath(document.getPath());
       initStatusBar();
    }
@@ -1674,7 +1727,7 @@ public class TextEditingTarget implements
             updateStatusBarPosition();
             if (docDisplay_.isScopeTreeReady(event.getPosition().getRow()))
                updateCurrentScope();
-               
+            
          }
       });
       updateStatusBarPosition();
@@ -2586,6 +2639,9 @@ public class TextEditingTarget implements
       if (extendedType.equals(SourceDocument.XT_RMARKDOWN))
          updateRmdFormatList();
       extendedType_ = extendedType;
+
+      // extended type can affect publish options
+      syncPublishPath(docUpdateSentinel_.getPath());
    }
 
    @Override
@@ -3085,27 +3141,6 @@ public class TextEditingTarget implements
    }
 
    @Handler
-   void onJumpToMatching()
-   {
-      docDisplay_.jumpToMatching();
-      docDisplay_.ensureCursorVisible();
-   }
-   
-   @Handler
-   void onSelectToMatching()
-   {
-      docDisplay_.selectToMatching();
-      docDisplay_.ensureCursorVisible();
-   }
-   
-   @Handler
-   void onExpandToMatching()
-   {
-      docDisplay_.expandToMatching();
-      docDisplay_.ensureCursorVisible();
-   }
-   
-   @Handler
    void onSplitIntoLines()
    {
       docDisplay_.splitIntoLines();
@@ -3126,6 +3161,28 @@ public class TextEditingTarget implements
          doCommentUncomment("<!--", "-->");
    }
    
+   /**
+    * Push the current contents and state of the text editor into the local
+    * copy of the source database
+    */
+   public void syncLocalSourceDb() 
+   {
+      SourceWindowManager manager =
+            RStudioGinjector.INSTANCE.getSourceWindowManager();
+      JsArray<SourceDocument> docs = manager.getSourceDocs();
+      for (int i = 0; i < docs.length(); i++)
+      {
+         if (docs.get(i).getId() == getId())
+         {
+            docs.get(i).getNotebookDoc().setChunkDefs(
+                  docDisplay_.getChunkDefs());
+            docs.get(i).setContents(docDisplay_.getCode());
+            docs.get(i).setDirty(dirtyState_.getValue());
+            break;
+         }
+      }
+   }
+
    @Handler
    void onPopoutDoc()
    {
@@ -3138,23 +3195,9 @@ public class TextEditingTarget implements
             @Override
             public void execute()
             {
-               // push the new doc state into the source database that the 
-               // new window will inherit
-               SourceWindowManager manager =
-                     RStudioGinjector.INSTANCE.getSourceWindowManager();
-               JsArray<SourceDocument> docs = manager.getSourceDocs();
-               for (int i = 0; i < docs.length(); i++)
-               {
-                  if (docs.get(i).getId() == getId())
-                  {
-                     docs.get(i).getNotebookDoc().setChunkDefs(
-                           docDisplay_.getChunkDefs());
-                     docs.get(i).setContents(docDisplay_.getCode());
-                     docs.get(i).setDirty(dirtyState_.getValue());
-                     break;
-                  }
-               }
-               
+               // push the new doc state into the local source database
+               syncLocalSourceDb();
+
                // fire popout event (this triggers a close in the current window
                // and the creation of a new window with the doc)
                events_.fireEvent(new PopoutDocEvent(getId(), 
@@ -3723,14 +3766,22 @@ public class TextEditingTarget implements
          // update notebook-specific options
          if (isNotebook)
          {
-            // chunk output should always be inline in notebooks
-            String outputType = docUpdateSentinel_.getProperty(
-                  TextEditingTargetNotebook.CHUNK_OUTPUT_TYPE);
-            if (outputType != TextEditingTargetNotebook.CHUNK_OUTPUT_INLINE)
+            // if the user manually set the output to console in a notebook,
+            // respect that (even though it's weird)
+            String outputType = RmdEditorOptions.getString(
+                  YamlFrontMatter.getFrontMatter(docDisplay_),
+                  TextEditingTargetNotebook.CHUNK_OUTPUT_TYPE, null);
+            if (outputType != TextEditingTargetNotebook.CHUNK_OUTPUT_CONSOLE)
             {
-               docUpdateSentinel_.setProperty(
-                     TextEditingTargetNotebook.CHUNK_OUTPUT_TYPE,
-                     TextEditingTargetNotebook.CHUNK_OUTPUT_INLINE);
+               // chunk output should always be inline in notebooks
+               outputType = docUpdateSentinel_.getProperty(
+                     TextEditingTargetNotebook.CHUNK_OUTPUT_TYPE);
+               if (outputType != TextEditingTargetNotebook.CHUNK_OUTPUT_INLINE)
+               {
+                  docUpdateSentinel_.setProperty(
+                        TextEditingTargetNotebook.CHUNK_OUTPUT_TYPE,
+                        TextEditingTargetNotebook.CHUNK_OUTPUT_INLINE);
+               }
             }
             view_.setIsNotebookFormat();
          }
@@ -3970,6 +4021,24 @@ public class TextEditingTarget implements
    void onExecuteCode()
    {
       codeExecution_.executeSelection(true);
+   }
+   
+   @Handler
+   void onExecuteCurrentLine()
+   {
+      codeExecution_.executeBehavior(UIPrefsAccessor.EXECUTE_LINE);
+   }
+
+   @Handler
+   void onExecuteCurrentStatement()
+   {
+      codeExecution_.executeBehavior(UIPrefsAccessor.EXECUTE_STATEMENT);
+   }
+
+   @Handler
+   void onExecuteCurrentParagraph()
+   {
+      codeExecution_.executeBehavior(UIPrefsAccessor.EXECUTE_PARAGRAPH);
    }
 
    @Override
@@ -4968,32 +5037,43 @@ public class TextEditingTarget implements
       final int type = isShinyDoc() ? RmdOutput.TYPE_SHINY:
                                       isRmdNotebook() ? RmdOutput.TYPE_NOTEBOOK:
                                                         RmdOutput.TYPE_STATIC;
-      
-      final Command command = new Command()
+      final Command renderCommand = new Command() 
       {
          @Override
          public void execute()
          {
-            saveThenExecute(null, new Command() {
-               @Override
-               public void execute()
-               {
-                  boolean asTempfile = isPackageDocumentationFile();
+            boolean asTempfile = isPackageDocumentationFile();
+            String viewerType = RmdEditorOptions.getString(
+                  getRmdFrontMatter(), RmdEditorOptions.PREVIEW_IN, null);
 
-                  rmarkdownHelper_.renderRMarkdown(
-                        docUpdateSentinel_.getPath(),
-                        docDisplay_.getCursorPosition().getRow() + 1,
-                        null,
-                        docUpdateSentinel_.getEncoding(),
-                        paramsFile,
-                        asTempfile,
-                        type,
-                        false,
-                        rmarkdownHelper_.getKnitWorkingDir(docUpdateSentinel_));
-               }
-            });  
+            rmarkdownHelper_.renderRMarkdown(
+                  docUpdateSentinel_.getPath(),
+                  docDisplay_.getCursorPosition().getRow() + 1,
+                  null,
+                  docUpdateSentinel_.getEncoding(),
+                  paramsFile,
+                  asTempfile,
+                  type,
+                  false,
+                  rmarkdownHelper_.getKnitWorkingDir(docUpdateSentinel_),
+                  viewerType);
+         }
+      };  
+
+      final Command saveCommand = new Command()
+      {
+         @Override
+         public void execute()
+         {
+            saveThenExecute(null, renderCommand);
          }
       };
+      
+      // save before rendering if the document is dirty or has never been saved;
+      // otherwise render directly
+      Command command = 
+            docUpdateSentinel_.getPath() == null || dirtyState_.getValue() ? 
+                  saveCommand : renderCommand;
       
       if (isRmdNotebook())
          dependencyManager_.withRMarkdown("Creating R Notebooks", command);
@@ -5241,7 +5321,7 @@ public class TextEditingTarget implements
             @Override
             public void execute()
             {
-               rmarkdownHelper_.renderNotebookv2(docUpdateSentinel_);
+               rmarkdownHelper_.renderNotebookv2(docUpdateSentinel_, null);
             }
          });
       }
@@ -6362,6 +6442,21 @@ public class TextEditingTarget implements
       return notebook_;
    }
    
+   /**
+    * Updates the path of the file loaded in the editor, as though the user
+    * had just saved the file at the new paht.
+    * 
+    * @param path New path for the editor
+    */
+   public void setPath(FileSystemItem path)
+   {
+      // Find the new type
+      TextFileType type = fileTypeRegistry_.getTextTypeForFile(path);
+      
+      // Simulate a completed save of the new path
+      new SaveProgressIndicator(path, type, null).onCompleted();
+   }
+   
    private void setRMarkdownBehaviorEnabled(boolean enabled)
    {
       // register idle monitor; automatically creates/refreshes previews
@@ -6506,4 +6601,7 @@ public class TextEditingTarget implements
 
       abstract void doExtract(final JsArrayString response);
    }
+   
+   private static final String PROPERTY_CURSOR_POSITION = "cursorPosition";
+   private static final String PROPERTY_SCROLL_LINE = "scrollLine";
 }

@@ -1,7 +1,7 @@
 /*
  * RErrorCategory.hpp
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-16 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -31,7 +31,8 @@ enum errc_t {
    SymbolNotFoundError,
    ListElementNotFoundError,
    UnexpectedDataTypeError,
-   NoDataAvailableError
+   NoDataAvailableError,
+   AttributeNotFoundError
 };
 
 } // namespace errc
@@ -39,7 +40,7 @@ enum errc_t {
 } // namespace rstudio
 
 
-namespace boost {
+namespace RSTUDIO_BOOST_NAMESPACE {
 namespace system {
 template <>
 struct is_error_code_enum<rstudio::r::errc::errc_t>

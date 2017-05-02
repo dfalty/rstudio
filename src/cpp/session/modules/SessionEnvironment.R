@@ -58,6 +58,9 @@
          else
             return ("NO_VALUE")
       }
+      else if (is(val, "python.builtin.object")) {
+         return (.rs.valueFromStr(val))
+      }
       else if (.rs.isFunction(val))
          return (.rs.getSignature(val))
       else if (is(val, "Date") || is(val, "POSIXct") || is(val, "POSIXlt")) {
@@ -65,9 +68,6 @@
            return (format(val))
          else
            return (.rs.valueFromStr(val))
-      }
-      else if (is(val, "tensorflow.builtin.object")) {
-         return (.rs.valueFromStr(val))
       }
       else
          return ("NO_VALUE")
@@ -489,9 +489,10 @@
          }
       }
    }
-   list (
+   list(
       name = .rs.scalar(objName),
       type = .rs.scalar(class),
+      clazz = c(class(obj), typeof(obj)),
       is_data = .rs.scalar(is.data.frame(obj)),
       value = .rs.scalar(val),
       description = .rs.scalar(desc),

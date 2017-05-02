@@ -34,6 +34,7 @@ import org.rstudio.core.client.events.TabClosingHandler;
 import org.rstudio.core.client.events.TabReorderEvent;
 import org.rstudio.core.client.events.TabReorderHandler;
 import org.rstudio.core.client.js.JsObject;
+import org.rstudio.core.client.resources.ImageResource2x;
 import org.rstudio.core.client.theme.res.ThemeResources;
 import org.rstudio.core.client.theme.res.ThemeStyles;
 import org.rstudio.studio.client.RStudioGinjector;
@@ -129,6 +130,7 @@ public class DocTabLayoutPanel
             DOM.sinkBitlessEvent(tabBar, "dragend");
             DOM.sinkBitlessEvent(tabBar, "dragleave");
             DOM.sinkBitlessEvent(tabBar, "drop");
+            DOM.sinkBitlessEvent(tabBar, "mousewheel");
             DOM.sinkBitlessEvent(tabBar, "wheel");
             Event.setEventListener(tabBar, dragManager_);
          }
@@ -493,12 +495,14 @@ public class DocTabLayoutPanel
                endDrag(event, ACTION_CANCEL);
             }
          }
-         else if (event.getType() == "wheel")
+         else if (event.getType() == "wheel" ||
+                  event.getType() == "mousewheel")
          {
             // extract the delta from the wheel event (note that this could be
             // zero)
             JsObject evt = event.cast();
-            double delta = evt.getDouble("deltaY");
+            double delta = evt.getDouble(event.getType() == "wheel" ?
+                  "deltaY" : "wheelDeltaY");
             
             // translate wheel scroll into tab selection; don't wrap
             int idx = getSelectedIndex();
@@ -1064,7 +1068,7 @@ public class DocTabLayoutPanel
 
          appendDirtyMarker();
 
-         Image img = new Image(ThemeResources.INSTANCE.closeTab());
+         Image img = new Image(new ImageResource2x(ThemeResources.INSTANCE.closeTab2x()));
          img.setStylePrimaryName(styles_.closeTabButton());
          img.addStyleName(ThemeStyles.INSTANCE.handCursor());
          contentPanel_.add(img);

@@ -1,7 +1,7 @@
 /*
  * PreferencesDialogResources.java
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -34,8 +34,18 @@ public interface PreferencesDialogResources extends ClientBundle
    @Source("PreferencesDialog.css")
    Styles styles();
 
-   ImageResource iconAppearance();
-   ImageResource iconPanes();
-   ImageResource iconPackages();
-   ImageResource iconRMarkdown();
+   @Source("iconAppearance_2x.png")
+   ImageResource iconAppearance2x();
+
+   @Source("iconPanes_2x.png")
+   ImageResource iconPanes2x();
+
+   @Source("iconPackages_2x.png")
+   ImageResource iconPackages2x();
+
+   @Source("iconRMarkdown_2x.png")
+   ImageResource iconRMarkdown2x();
+
+   @Source("iconTerminal_2x.png")
+   ImageResource iconTerminal2x();
 }

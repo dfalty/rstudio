@@ -286,6 +286,15 @@ private:
       else if (config.buildType == r_util::kBuildTypeWebsite)
       {
          options.workingDir = buildTargetPath;
+         
+         // pass along R_LIBS
+         core::system::Options environment;
+         core::system::environment(&environment);
+         std::string rLibs = module_context::libPathsString();
+         if (!rLibs.empty())
+            core::system::setenv(&environment, "R_LIBS", rLibs);
+         options.environment = environment;
+         
          executeWebsiteBuild(type, subType, buildTargetPath, options, cb);
       }
       else if (config.buildType == r_util::kBuildTypeCustom)
@@ -558,11 +567,14 @@ private:
       core::system::ProcessOptions pkgOptions(options);
       core::system::Options childEnv;
       core::system::environment(&childEnv);
-
+      
       // allow child process to inherit our R_LIBS
       std::string libPaths = module_context::libPathsString();
       if (!libPaths.empty())
          core::system::setenv(&childEnv, "R_LIBS", libPaths);
+      
+      // record the library paths used when this build was kicked off
+      libPaths_ = module_context::getLibPaths();
 
       // prevent spurious cygwin warnings on windows
 #ifdef _WIN32
@@ -808,6 +820,7 @@ private:
    bool rExecute(const std::string& command,
                  const FilePath& workingDir,
                  core::system::ProcessOptions pkgOptions,
+                 bool vanilla,
                  const core::system::ProcessCallbacks& cb)
    {
       // Find the path to R
@@ -825,7 +838,8 @@ private:
       // build args
       std::vector<std::string> args;
       args.push_back("--slave");
-      args.push_back("--vanilla");
+      if (vanilla)
+         args.push_back("--vanilla");
       args.push_back("-e");
       args.push_back(command);
 
@@ -844,7 +858,7 @@ private:
                         core::system::ProcessOptions pkgOptions,
                         const core::system::ProcessCallbacks& cb)
    {
-      if (!rExecute(command, packagePath, pkgOptions, cb))
+      if (!rExecute(command, packagePath, pkgOptions, true /* --vanilla */, cb))
          return false;
 
       usedDevtools_ = true;
@@ -954,15 +968,9 @@ private:
       cmd << "-e";
       std::vector<std::string> rSourceCommands;
       
-#ifdef _WIN32
-# define kBuildCommandBackslashes "\\\\"
-#else
-# define kBuildCommandBackslashes "\\\\\\\\"
-#endif
-      
       boost::format fmt(
          "setwd('%1%');"
-         "files <- list.files(pattern = '" kBuildCommandBackslashes ".[rR]$');"
+         "files <- list.files(pattern = '[.][rR]$');"
          "invisible(lapply(files, function(x) {"
          "    system(paste(shQuote('%2%'), '--vanilla --slave -f', shQuote(x)))"
          "}))"
@@ -1175,7 +1183,7 @@ private:
 
       // execute command
       enqueCommandString(command);
-      rExecute(command, websitePath, options, cb);
+      rExecute(command, websitePath, options, false /* --vanilla */, cb);
    }
 
    void showWebsitePreview(const FilePath& websitePath)
@@ -1342,6 +1350,15 @@ private:
 #endif
          }
 
+         // if this is a package build then try to clean up a left
+         // behind 00LOCK directory
+         if (!pkgInfo_.empty() && !libPaths_.empty())
+         {
+            FilePath libPath = libPaths_[0];
+            FilePath lockPath = libPath.childPath("00LOCK-" + pkgInfo_.name());
+            lockPath.removeIfExists();
+         }
+         
          // never restart R after a failed build
          restartR_ = false;
 
@@ -1509,6 +1526,7 @@ private:
    json::Array errorsJson_;
    r_util::RPackageInfo pkgInfo_;
    projects::RProjectBuildOptions options_;
+   std::vector<FilePath> libPaths_;
    std::string successMessage_;
    std::string buildToolsWarning_;
    boost::function<void()> successFunction_;
@@ -1986,6 +2004,6 @@ bool installRBuildTools(const std::string& action)
 
 }
 
-} // namesapce session
+} // namespace session
 } // namespace rstudio
 

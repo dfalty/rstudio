@@ -128,7 +128,6 @@ public class ChunkOutputStream extends FlowPanel
             vconsole_.submit(outputText, classOfOutput(outputType));
          }
       }
-      vconsole_.redraw(console_.getElement());
    }
    
    @Override
@@ -469,6 +468,7 @@ public class ChunkOutputStream extends FlowPanel
       flushQueuedErrors();
       
       List<ChunkOutputPage> pages = new ArrayList<ChunkOutputPage>();
+      List<Widget> removed = new ArrayList<Widget>();
       for (Widget w: this)
       {
          // extract ordinal and metadata
@@ -486,13 +486,13 @@ public class ChunkOutputStream extends FlowPanel
             ChunkDataPage data = new ChunkDataPage(widget, 
                   (NotebookFrameMetadata)metadata.cast(), ordinal);
             pages.add(data);
-            remove(w);
+            removed.add(w);
             continue;
          }
          else if (w instanceof ChunkOrdinalWidget)
          {
             pages.add(new ChunkOrdinalPage(ordinal));
-            remove(w);
+            removed.add(w);
             continue;
          }
 
@@ -508,7 +508,7 @@ public class ChunkOutputStream extends FlowPanel
             ChunkPlotPage page = new ChunkPlotPage(plot.plotUrl(),
                   plot.getMetadata(), ordinal, null, chunkOutputSize_);
             pages.add(page);
-            remove(w);
+            removed.add(w);
          }
          else if (inner instanceof ChunkOutputFrame)
          {
@@ -520,9 +520,11 @@ public class ChunkOutputStream extends FlowPanel
             frame.cancelPendingLoad();
 
             pages.add(html);
-            remove(w);
+            removed.add(w);
          }
       }
+      for (Widget r: removed)
+         this.remove(r);
       return pages;
    }
    
@@ -621,10 +623,6 @@ public class ChunkOutputStream extends FlowPanel
 
    private void initConsole()
    {
-      if (vconsole_ == null)
-         vconsole_ = new VirtualConsole();
-      else
-         vconsole_.clear();
       if (console_ == null)
       {
          console_ = new PreWidget();
@@ -636,6 +634,10 @@ public class ChunkOutputStream extends FlowPanel
       {
          console_.getElement().setInnerHTML("");
       }
+      if (vconsole_ == null)
+         vconsole_ = new VirtualConsole(console_.getElement());
+      else
+         vconsole_.clear();
 
       // attach the console
       addWithOrdinal(console_, maxOrdinal_ + 1);
@@ -644,8 +646,7 @@ public class ChunkOutputStream extends FlowPanel
    private void renderConsoleOutput(String text, String clazz)
    {
       initializeOutput(RmdChunkOutputUnit.TYPE_TEXT);
-      vconsole_.submitAndRender(text, clazz,
-            console_.getElement());
+      vconsole_.submit(text, clazz);
       onHeightChanged();
    }
    

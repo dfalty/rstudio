@@ -1,5 +1,6 @@
 mingw64*/
 boost*win*/
+boost-*
 gnudiff/
 gnugrep/
 msys_ssh/
@@ -8,3 +9,4 @@ hunspell/
 sumatra/
 winutils/
 rtools*
+winpty*/

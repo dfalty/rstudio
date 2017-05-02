@@ -101,8 +101,12 @@ core::ProgramStatus Options::read(int argc, char * const argv[])
 
    // detect running in x64 directory and tweak resource path
 #ifdef _WIN32
+   bool is64 = false;
    if (resourcePath_.complete("x64").exists())
+   {
+      is64 = true;
       resourcePath_ = resourcePath_.parent();
+   }
 #endif
    
    // run tests flag
@@ -200,7 +204,13 @@ core::ProgramStatus Options::read(int argc, char * const argv[])
        "default directory for new projects")
       ("show-help-home",
        value<bool>(&showHelpHome_)->default_value(false),
-         "show help home page at startup");
+         "show help home page at startup")
+      ("session-default-console-term",
+       value<std::string>(&defaultConsoleTerm_)->default_value("xterm-256color"),
+       "default TERM setting for R console")
+      ("session-default-clicolor-force",
+       value<bool>(&defaultCliColorForce_)->default_value(true),
+       "default CLICOLOR_FORCE setting for R console");
 
    // allow options
    options_description allow("allow");
@@ -220,9 +230,15 @@ core::ProgramStatus Options::read(int argc, char * const argv[])
       ("allow-shell",
          value<bool>(&allowShell_)->default_value(true),
          "allow access to shell dialog")
+      ("allow-terminal-websockets",
+         value<bool>(&allowTerminalWebsockets_)->default_value(true),
+         "allow connection to terminal sessions with websockets")
       ("allow-file-downloads",
          value<bool>(&allowFileDownloads_)->default_value(true),
          "allow file downloads from the files pane")
+      ("allow-file-uploads",
+         value<bool>(&allowFileUploads_)->default_value(true),
+         "allow file uploads from the files pane")
       ("allow-remove-public-folder",
          value<bool>(&allowRemovePublicFolder_)->default_value(true),
          "allow removal of the user public folder")
@@ -267,7 +283,7 @@ core::ProgramStatus Options::read(int argc, char * const argv[])
          value<bool>(&autoReloadSource_)->default_value(false),
          "Reload R source if it changes during the session")
       ("r-compatible-graphics-engine-version",
-         value<int>(&rCompatibleGraphicsEngineVersion_)->default_value(11),
+         value<int>(&rCompatibleGraphicsEngineVersion_)->default_value(12),
          "Maximum graphics engine version we are compatible with")
       ("r-resources-path",
          value<std::string>(&rResourcesPath_)->default_value("resources"),
@@ -334,7 +350,10 @@ core::ProgramStatus Options::read(int argc, char * const argv[])
       ("external-libclang-headers-path",
         value<std::string>(&libclangHeadersPath_)->default_value(
                                        "resources/libclang/builtin-headers"),
-        "Path to libclang builtin headers");
+        "Path to libclang builtin headers")
+      ("external-winpty-path",
+        value<std::string>(&winptyPath_)->default_value("bin"),
+         "Path to winpty binaries");
 
    // user options (default user identity to current username)
    std::string currentUsername = core::system::username();
@@ -500,6 +519,27 @@ core::ProgramStatus Options::read(int argc, char * const argv[])
    resolvePath(resourcePath_, &msysSshPath_);
    resolvePath(resourcePath_, &sumatraPath_);
    resolvePath(resourcePath_, &winutilsPath_);
+   resolvePath(resourcePath_, &winptyPath_);
+
+   // winpty.dll lives next to rsession.exe on a full install; otherwise
+   // it lives in a directory named 32 or 64
+   core::FilePath pty(winptyPath_);
+   std::string completion;
+   if (pty.isWithin(resourcePath_))
+   {
+      if (is64)
+         completion = "x64/winpty.dll";
+      else
+         completion = "winpty.dll";
+   }
+   else
+   {
+      if (is64)
+         completion = "64/bin/winpty.dll";
+      else
+         completion = "32/bin/winpty.dll";
+   }
+   winptyPath_ = pty.complete(completion).absolutePath();
 #endif
    resolvePath(resourcePath_, &hunspellDictionariesPath_);
    resolvePath(resourcePath_, &mathjaxPath_);

@@ -26,9 +26,12 @@ import com.google.inject.Inject;
 
 import org.rstudio.core.client.BrowseCap;
 import org.rstudio.core.client.StringUtil;
+import org.rstudio.core.client.resources.ImageResource2x;
 import org.rstudio.core.client.theme.ThemeFonts;
 import org.rstudio.core.client.widget.SelectWidget;
 import org.rstudio.studio.client.application.Desktop;
+import org.rstudio.studio.client.application.events.EventBus;
+import org.rstudio.studio.client.application.events.ThemeChangedEvent;
 import org.rstudio.studio.client.workbench.prefs.model.RPrefs;
 import org.rstudio.studio.client.workbench.prefs.model.UIPrefs;
 import org.rstudio.studio.client.workbench.views.source.editors.text.themes.AceThemes;
@@ -38,10 +41,12 @@ public class AppearancePreferencesPane extends PreferencesPane
    @Inject
    public AppearancePreferencesPane(PreferencesDialogResources res,
                                     UIPrefs uiPrefs,
-                                    final AceThemes themes)
+                                    final AceThemes themes,
+                                    EventBus eventBus)
    {
       res_ = res;
       uiPrefs_ = uiPrefs;
+      eventBus_ = eventBus;
 
       VerticalPanel leftPanel = new VerticalPanel();
 
@@ -154,6 +159,21 @@ public class AppearancePreferencesPane extends PreferencesPane
       theme_.addStyleName(res.styles().themeChooser());
       leftPanel.add(theme_);
       theme_.setValue(themes.getEffectiveThemeName(uiPrefs_.theme().getGlobalValue()));
+      
+      flatTheme_ = new SelectWidget("Global theme:",
+                                new String[]{"Classic", "Flat", "Dark", "Alternate"},
+                                new String[]{"classic", "default", "dark-grey", "alternate"},
+                                false);
+      flatTheme_.addStyleName(res.styles().themeChooser());
+      flatTheme_.getListBox().addChangeHandler(new ChangeHandler()
+      {
+         public void onChange(ChangeEvent event)
+         {
+         }
+      });
+      flatTheme_.setValue(uiPrefs_.getFlatTheme().getGlobalValue());
+
+      leftPanel.add(flatTheme_);
 
       FlowPanel previewPanel = new FlowPanel();
       previewPanel.setSize("100%", "100%");
@@ -188,7 +208,7 @@ public class AppearancePreferencesPane extends PreferencesPane
    @Override
    public ImageResource getIcon()
    {
-      return res_.iconAppearance();
+      return new ImageResource2x(res_.iconAppearance2x());
    }
    
    @Override
@@ -223,6 +243,11 @@ public class AppearancePreferencesPane extends PreferencesPane
          }
       }
 
+      uiPrefs_.getFlatTheme().setGlobalValue(flatTheme_.getValue());  
+      ThemeChangedEvent themeChangedEvent = new ThemeChangedEvent(flatTheme_.getValue());
+      eventBus_.fireEvent(themeChangedEvent);
+      eventBus_.fireEventToAllSatellites(themeChangedEvent);
+      
       return restartRequired;
    }
 
@@ -241,6 +266,7 @@ public class AppearancePreferencesPane extends PreferencesPane
    private String initialFontFace_;
    private SelectWidget zoomLevel_;
    private String initialZoomLevel_;
+   private SelectWidget flatTheme_;
 
    private static final String CODE_SAMPLE =
          "# plotting of R objects\n" +
@@ -273,4 +299,5 @@ public class AppearancePreferencesPane extends PreferencesPane
          "    UseMethod(\"plot\")\n" +
          "}\n";
 
+   EventBus eventBus_;
 }

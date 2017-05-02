@@ -44,7 +44,7 @@ if(NOT WIN32)
          endif()
       endif()
 
-      set(QMAKE_QT50_SDK "/opt/RStudio-QtSDK/${QT_VERSION}/${QT_COMPILER}")
+      set(QMAKE_QT50_SDK "/opt/RStudio-QtSDK/Qt${QT_VERSION}/${QT_VERSION_SUBDIR}/${QT_COMPILER}")
       if(EXISTS ${QMAKE_QT50_SDK})
          set(QT_QMAKE_EXECUTABLE "${QMAKE_QT50_SDK}/bin/qmake")
       else()
@@ -252,7 +252,7 @@ if(WIN32)
       set(LINK_FLAGS -Wl,-subsystem,windows -lversion)
       add_custom_command(
          OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/res.o"
-         COMMAND windres.exe
+         COMMAND "${WINDRES}"
             -I "."
             -i "rstudio.rc"
             -o "${CMAKE_CURRENT_BINARY_DIR}/res.o"

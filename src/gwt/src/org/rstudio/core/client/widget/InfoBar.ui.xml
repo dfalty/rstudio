@@ -23,6 +23,8 @@
       .dismiss {
          margin-top: 4px;
          margin-right: 4px;
+         width: 9px;
+         height: 9px;
    }
    </ui:style>
 
@@ -36,7 +38,7 @@
       </g:center>
       <g:east size="13">
           <g:Image ui:field="dismiss_"
-                   resource="{themeRes.closeTab}"
+                   resource="{themeRes.closeTab2x}"
                    styleName="{style.dismiss}"
                    title="Dismiss"/>
       </g:east>

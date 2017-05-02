@@ -1,7 +1,7 @@
 /*
  * BrowseCap.java
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -156,6 +156,32 @@ public class BrowseCap
       else
          return getDevicePixelRatio();
    }
+
+   public static String getPlatformName()
+   {
+      if (BrowseCap.isMacintosh())
+         return "Mac";
+      else if (BrowseCap.isLinux())
+         return "Linux";
+      else if (BrowseCap.isWindows())
+         return "Windows";
+      else
+         return "Unknown";
+   }
+
+   public static String getBrowserName()
+   {
+      if (BrowseCap.isChrome())
+         return "Chrome";
+      else if (BrowseCap.isFirefox())
+         return "Firefox";
+      else if (BrowseCap.isSafari())
+         return "Safari";
+      else if (BrowseCap.INSTANCE.isInternetExplorer())
+         return "IE";
+      else
+         return "Unknown";
+   }
    
    private static native final double getDevicePixelRatio() /*-{
       try
@@ -229,6 +255,5 @@ public class BrowseCap
          if (isFirefox())
             Document.get().getBody().addClassName("ubuntu_mono_firefox");
       }
-
    }
 }

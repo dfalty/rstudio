@@ -205,7 +205,6 @@ public class DependencyManager implements InstallShinyEvent.Handler,
       ArrayList<Dependency> deps = new ArrayList<Dependency>();
       deps.add(Dependency.cranPackage("evaluate", "0.8"));
       deps.add(Dependency.cranPackage("digest", "0.6"));
-      deps.add(Dependency.cranPackage("formatR", "1.1"));
       deps.add(Dependency.cranPackage("highr", "0.3"));
       deps.add(Dependency.cranPackage("markdown", "0.7"));
       deps.add(Dependency.cranPackage("stringr", "0.6"));
@@ -620,6 +619,37 @@ public class DependencyManager implements InstallShinyEvent.Handler,
            }
         }
      );
+   }
+
+   public void withConnectionPackage(String connectionName,
+                                     String packageName,
+                                     String packageVersion,
+                                     final Operation operation)
+   {
+     withDependencies(
+        "Preparing Connection",
+        connectionName, 
+        connectionPackageDependenciesArray(packageName, packageVersion), 
+        false,
+        new CommandWithArg<Boolean>()
+        {
+           @Override
+           public void execute(Boolean succeeded)
+           {
+              if (succeeded)
+                 operation.execute();
+           }
+        }
+     );
+   }
+   
+   private Dependency[] connectionPackageDependenciesArray(String packageName,
+                                                           String packageVersion)
+   {
+    ArrayList<Dependency> deps = new ArrayList<Dependency>();
+      deps.add(Dependency.cranPackage(packageName, packageVersion));
+
+      return deps.toArray(new Dependency[deps.size()]);
    }
    
    private void withDependencies(String progressCaption,

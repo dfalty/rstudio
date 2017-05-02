@@ -1,7 +1,7 @@
 /*
  * SessionConnections.cpp
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -35,9 +35,14 @@
 #include <session/SessionConsoleProcess.hpp>
 #include <session/SessionModuleContext.hpp>
 #include <session/SessionUserSettings.hpp>
+#include <session/SessionPackageProvidedExtension.hpp>
 
 #include "ActiveConnections.hpp"
 #include "ConnectionHistory.hpp"
+#include "ConnectionsIndexer.hpp"
+#include "Connection.hpp"
+
+#define kConnectionsPath "connections"
 
 using namespace rstudio::core;
 
@@ -50,33 +55,87 @@ namespace connections {
 namespace {
 
 
-SEXP rs_connectionOpened(SEXP typeSEXP,
-                         SEXP hostSEXP,
-                         SEXP finderSEXP,
-                         SEXP connectCodeSEXP,
-                         SEXP disconnectCodeSEXP,
-                         SEXP listTablesCodeSEXP,
-                         SEXP listColumnsCodeSEXP,
-                         SEXP previewTableCodeSEXP)
+SEXP rs_connectionOpened(SEXP connectionSEXP)
 {
-   // read params
-   std::string type = r::sexp::safeAsString(typeSEXP);
-   std::string host = r::sexp::safeAsString(hostSEXP);
-   std::string finder = r::sexp::safeAsString(finderSEXP);
-   std::string connectCode = r::sexp::safeAsString(connectCodeSEXP);
-   std::string disconnectCode = r::sexp::safeAsString(disconnectCodeSEXP);
-   std::string listTablesCode = r::sexp::safeAsString(listTablesCodeSEXP);
-   std::string listColumnsCode = r::sexp::safeAsString(listColumnsCodeSEXP);
-   std::string previewTableCode = r::sexp::safeAsString(previewTableCodeSEXP);
+   // read params -- note that these attributes are already guaranteed to
+   // exist as we validate the S3 object on the R side
+   std::string type, host, connectCode, displayName, connectIcon;
+   r::sexp::getNamedListElement(connectionSEXP, "type", &type);
+   r::sexp::getNamedListElement(connectionSEXP, "host", &host);
+   r::sexp::getNamedListElement(connectionSEXP, "connectCode", &connectCode);
+   r::sexp::getNamedListElement(connectionSEXP, "displayName", &displayName);
+   r::sexp::getNamedListElement(connectionSEXP, "icon", &connectIcon);
 
+   // extract actions -- marshal R list (presuming we have one, as some
+   // connections won't) into internal representation
+   SEXP actionList = R_NilValue;
+   Error error = r::sexp::getNamedListSEXP(connectionSEXP, "actions",
+         &actionList);
+   if (error)
+      LOG_ERROR(error);
+   std::vector<ConnectionAction> actions;
+   if (!r::sexp::isNull(actionList))
+   {
+      std::vector<std::string> actionNames;
+      r::sexp::getNames(actionList, &actionNames);
+      BOOST_FOREACH(const std::string& actionName, actionNames)
+      {
+         std::string icon;
+         SEXP action;
+
+         // extract the action object from the list
+         error = r::sexp::getNamedListSEXP(actionList, actionName, &action);
+         if (error)
+         {
+            LOG_ERROR(error);
+            continue;
+         }
+
+         // extract the icon
+         error = r::sexp::getNamedListElement(action, "icon", &icon);
+         if (error)
+         {
+            LOG_ERROR(error);
+            continue;
+         }
+         actions.push_back(ConnectionAction(actionName, icon));
+      }
+   }
+
+   // extract object type
+   SEXP objectTypeList = R_NilValue;
+   error = r::sexp::getNamedListSEXP(connectionSEXP, "objectTypes",
+         &objectTypeList);
+   if (error)
+      LOG_ERROR(error);
+   std::vector<ConnectionObjectType> objectTypes;
+   if (!r::sexp::isNull(objectTypeList))
+   {
+      int n = r::sexp::length(objectTypeList);
+      for (int i = 0; i < n; i++)
+      {
+         std::string name;
+         std::string icon;
+         std::string contains;
+         SEXP objectType = VECTOR_ELT(objectTypeList, i);
+
+         error = r::sexp::getNamedListElement(objectType, "name", &name);
+         if (error)
+         {
+            LOG_ERROR(error);
+            continue;
+         }
+
+         // these fields are optional
+         r::sexp::getNamedListElement(objectType, "contains", &contains);
+         r::sexp::getNamedListElement(objectType, "icon", &icon);
+
+         objectTypes.push_back(ConnectionObjectType(name, contains, icon));
+      }
+   }
    // create connection object
-   Connection connection(ConnectionId(type, host),
-                         finder,
-                         connectCode,
-                         disconnectCode,
-                         listTablesCode,
-                         listColumnsCode,
-                         previewTableCode,
+   Connection connection(ConnectionId(type, host), connectCode, displayName,
+                         connectIcon, actions, objectTypes,
                          date_time::millisecondsSinceEpoch());
 
    // update connection history
@@ -85,12 +144,37 @@ SEXP rs_connectionOpened(SEXP typeSEXP,
    // update active connections
    activeConnections().add(connection.id);
 
-   // fire connection opended event
+   // fire connection opened event
    ClientEvent event(client_events::kConnectionOpened,
                      connectionJson(connection));
    module_context::enqueClientEvent(event);
 
    return R_NilValue;
+}
+
+void addObjectSpecifiers(const json::Array& specifiers, 
+                         r::exec::RFunction* pFunction)
+{
+   for (unsigned i = 0; i < specifiers.size(); i++) 
+   {
+      // make sure we're dealing with a json object
+      const json::Value& val = specifiers[i];
+      if (val.type() != json::ObjectType)
+         continue;
+
+      // extract the name and type of the specifier
+      std::string name, type;
+      Error error = json::readObject(val.get_obj(), 
+            "name", &name, "type", &type);
+      if (error)
+      {
+         LOG_ERROR(error);
+         continue;
+      }
+
+      // add as a named argument to the function
+      pFunction->addParam(type, name);
+   }
 }
 
 SEXP rs_connectionClosed(SEXP typeSEXP, SEXP hostSEXP)
@@ -119,34 +203,6 @@ SEXP rs_connectionUpdated(SEXP typeSEXP, SEXP hostSEXP, SEXP hintSEXP)
    module_context::enqueClientEvent(event);
 
    return R_NilValue;
-}
-
-SEXP rs_defaultSparkClusterUrl()
-{
-   std::string clusterUrl = "spark://local:7077";
-
-   // for rstudio server do some extra detection
-   if (options().programMode() == kSessionProgramModeServer)
-   {
-      FilePath clusterUrlPath("/root/spark-ec2/cluster-url");
-      if (clusterUrlPath.exists())
-      {
-         std::string ec2ClusterUrl;
-         Error error = core::readStringFromFile(clusterUrlPath, &ec2ClusterUrl);
-         if (!error)
-         {
-            boost::algorithm::trim(ec2ClusterUrl);
-            if (!ec2ClusterUrl.empty())
-               clusterUrl = ec2ClusterUrl;
-         }
-         else if (error.code() != boost::system::errc::permission_denied)
-         {
-            LOG_ERROR(error);
-         }
-      }
-   }
-   r::sexp::Protect rProtect;
-   return r::sexp::create(clusterUrl, &rProtect);
 }
 
 SEXP rs_availableRemoteServers()
@@ -190,6 +246,23 @@ SEXP rs_availableRemoteServers()
    return r::sexp::create(remoteServers, &rProtect);
 }
 
+SEXP rs_availableConnections()
+{
+   std::string data = json::write(connectionsRegistryAsJson());
+
+   r::sexp::Protect rProtect;
+   return r::sexp::create(data, &rProtect);
+}
+
+SEXP rs_connectionIcon(SEXP iconNameSEXP)
+{
+   std::string iconName = r::sexp::safeAsString(iconNameSEXP);
+
+   std::string data = iconData("drivers", iconName, "");
+
+   r::sexp::Protect rProtect;
+   return r::sexp::create(data, &rProtect);
+}
 
 Error removeConnection(const json::JsonRpcRequest& request,
                        json::JsonRpcResponse* pResponse)
@@ -209,131 +282,82 @@ Error removeConnection(const json::JsonRpcRequest& request,
    return Success();
 }
 
-Error getDisconnectCode(const json::JsonRpcRequest& request,
+Error connectionDisconnect(const json::JsonRpcRequest& request,
                         json::JsonRpcResponse* pResponse)
 {
    // read params
-   json::Object idJson;
    std::string finder, disconnectCode;
-   Error error = json::readObjectParam(request.params, 0,
-                                       "id", &idJson,
-                                       "finder", &finder,
-                                       "disconnect_code", &disconnectCode);
-   if (error)
-      return error;
    std::string type, host;
-   error = json::readObject(idJson, "type", &type, "host", &host);
+   Error error = json::readObjectParam(request.params, 0, 
+         "type", &type, "host", &host);
    if (error)
       return error;
 
-   // call R function to determine disconnect code
-   r::exec::RFunction func(".rs.getDisconnectCode");
-   func.addParam(finder);
+   // call R function to perform disconnection
+   r::exec::RFunction func(".rs.connectionDisconnect");
+   func.addParam(type);
    func.addParam(host);
-   func.addParam(disconnectCode);
-   std::string code;
-   error = func.call(&code);
+   error = func.call();
    if (error)
    {
       LOG_ERROR(error);
       return error;
    }
 
-   pResponse->setResult(code);
-
    return Success();
 }
 
-Error readConnectionParam(const json::JsonRpcRequest& request,
-                          Connection* pConnection)
+Error readConnectionIdParam(const json::JsonRpcRequest& request,
+                            ConnectionId* pConnectionId)
 {
    // read param
-   json::Object connectionJson;
-   Error error = json::readParam(request.params, 0, &connectionJson);
+   json::Object connectionIdJson;
+   Error error = json::readParam(request.params, 0, &connectionIdJson);
    if (error)
       return error;
 
-   return connectionFromJson(connectionJson, pConnection);
+   return connectionIdFromJson(connectionIdJson, pConnectionId);
 }
 
-Error readConnectionAndTableParams(const json::JsonRpcRequest& request,
-                                   Connection* pConnection,
-                                   std::string* pTable)
+Error readConnectionIdAndObjectParams(const json::JsonRpcRequest& request,
+                                      ConnectionId* pConnectionId,
+                                      json::Array* pObjectSpecifier)
 {
    // get connection param
-   Error error = readConnectionParam(request, pConnection);
+   Error error = readConnectionIdParam(request, pConnectionId);
    if (error)
       return error;
 
-   // get table param
-   std::string table;
-   return json::readParam(request.params, 1, pTable);
+   // get object param
+   return json::readParam(request.params, 1, pObjectSpecifier);
 }
 
-
-Error showSparkLog(const json::JsonRpcRequest& request,
-                   json::JsonRpcResponse* pResponse)
+Error connectionExecuteAction(const json::JsonRpcRequest& request,
+                              json::JsonRpcResponse* pResponse)
 {
-   // get connection param
-   Connection connection;
-   Error error = readConnectionParam(request, &connection);
+   ConnectionId connectionId;
+   std::string action;
+   Error error = readConnectionIdParam(request, &connectionId);
    if (error)
       return error;
-
-   // get the log file
-   std::string log;
-   error = r::exec::RFunction(".rs.getSparkLogFile",
-                                 connection.finder,
-                                 connection.id.host).call(&log);
+   error = json::readParam(request.params, 1, &action);
    if (error)
-   {
-      LOG_ERROR(error);
       return error;
-   }
-
-   // show the file
-   module_context::showFile(FilePath(log));
-
-   return Success();
+   
+   return r::exec::RFunction(".rs.connectionExecuteAction",
+                                 connectionId.type,
+                                 connectionId.host,
+                                 action).call();
 }
 
-Error showSparkUI(const json::JsonRpcRequest& request,
-                  json::JsonRpcResponse* pResponse)
+void connectionListObjects(const json::JsonRpcRequest& request,
+                           const json::JsonRpcFunctionContinuation& continuation)
 {
    // get connection param
-   Connection connection;
-   Error error = readConnectionParam(request, &connection);
-   if (error)
-      return error;
-
-   // get the url
-   std::string url;
-   error = r::exec::RFunction(".rs.getSparkWebUrl",
-                                 connection.finder,
-                                 connection.id.host).call(&url);
-   if (error)
-   {
-      LOG_ERROR(error);
-      return error;
-   }
-
-   // portmap if necessary
-   url = module_context::mapUrlPorts(url);
-
-   // show the ui
-   ClientEvent event = browseUrlEvent(url);
-   module_context::enqueClientEvent(event);
-
-   return Success();
-}
-
-
-void connectionListTables(const json::JsonRpcRequest& request,
-                          const json::JsonRpcFunctionContinuation& continuation)
-{
-   // get connection param
-   Connection connection;
-   Error error = readConnectionParam(request, &connection);
+   ConnectionId connectionId;
+   json::Array objectSpecifier;
+   Error error = readConnectionIdAndObjectParams(request, &connectionId,
+         &objectSpecifier);
    if (error)
    {
       json::JsonRpcResponse response;
@@ -344,20 +368,31 @@ void connectionListTables(const json::JsonRpcRequest& request,
    // response
    json::JsonRpcResponse response;
 
-   // get the list of tables
-   std::vector<std::string> tables;
-   error = r::exec::RFunction(".rs.connectionListTables",
-                                 connection.finder,
-                                 connection.id.host,
-                                 connection.listTablesCode).call(&tables);
+   // get the list of objects
+   SEXP objects;
+   r::sexp::Protect protect;
+   r::exec::RFunction listObjects(".rs.connectionListObjects",
+                                 connectionId.type,
+                                 connectionId.host);
+   addObjectSpecifiers(objectSpecifier, &listObjects);
+   error = listObjects.call(&objects, &protect);
    if (error)
    {
       continuation(error, &response);
    }
    else
    {
-      response.setResult(json::toJsonArray((tables)));
-      continuation(Success(), &response);
+      json::Value result;
+      error = r::json::jsonValueFromObject(objects, &result);
+      if (error)
+      {
+         continuation(error, &response);
+      }
+      else
+      {
+         response.setResult(result);
+         continuation(Success(), &response);
+      }
    }
 }
 
@@ -396,9 +431,10 @@ void connectionListFields(const json::JsonRpcRequest& request,
                           const json::JsonRpcFunctionContinuation& continuation)
 {
    // get connection and table params
-   Connection connection;
-   std::string table;
-   Error error = readConnectionAndTableParams(request, &connection, &table);
+   ConnectionId connectionId;
+   json::Array objectSpecifier;
+   Error error = readConnectionIdAndObjectParams(request, &connectionId,
+         &objectSpecifier);
    if (error)
    {
       json::JsonRpcResponse response;
@@ -409,24 +445,25 @@ void connectionListFields(const json::JsonRpcRequest& request,
    // get the list of fields
    r::sexp::Protect rProtect;
    SEXP sexpResult;
-   error = r::exec::RFunction(".rs.connectionListColumns",
-                                 connection.finder,
-                                 connection.id.host,
-                                 connection.listColumnsCode,
-                                 table).call(&sexpResult, &rProtect);
-
+   r::exec::RFunction listCols(".rs.connectionListColumns",
+                                 connectionId.type,
+                                 connectionId.host);
+   
+   addObjectSpecifiers(objectSpecifier, &listCols);
+   error = listCols.call(&sexpResult, &rProtect);
 
    // send the response
    sendResponse(error, sexpResult, continuation, ERROR_LOCATION);
 }
 
-void connectionPreviewTable(const json::JsonRpcRequest& request,
-                          const json::JsonRpcFunctionContinuation& continuation)
+void connectionPreviewObject(const json::JsonRpcRequest& request,
+                             const json::JsonRpcFunctionContinuation& continuation)
 {
    // get connection and table params
-   Connection connection;
-   std::string table;
-   Error error = readConnectionAndTableParams(request, &connection, &table);
+   ConnectionId connectionId;
+   json::Array objectSpecifier;
+   Error error = readConnectionIdAndObjectParams(request, &connectionId,
+         &objectSpecifier);
    if (error)
    {
       json::JsonRpcResponse response;
@@ -437,12 +474,12 @@ void connectionPreviewTable(const json::JsonRpcRequest& request,
    // view the table
    r::sexp::Protect rProtect;
    SEXP sexpResult;
-   error = r::exec::RFunction(".rs.connectionPreviewTable",
-                                 connection.finder,
-                                 connection.id.host,
-                                 connection.previewTableCode,
-                                 table,
-                                 1000).call(&sexpResult, &rProtect);
+   r::exec::RFunction previewObject(".rs.connectionPreviewObject",
+                                 connectionId.type,
+                                 connectionId.host,
+                                 1000);
+   addObjectSpecifiers(objectSpecifier, &previewObject); 
+   error = previewObject.call(&sexpResult, &rProtect);
 
    // send the response
    sendResponse(error, sexpResult, continuation, ERROR_LOCATION);
@@ -501,15 +538,18 @@ Error installSpark(const json::JsonRpcRequest& request,
    args.push_back("-e");
    args.push_back(cmd);
 
+   boost::shared_ptr<console_process::ConsoleProcessInfo> pCPI =
+         boost::make_shared<console_process::ConsoleProcessInfo>(
+            "Installing Spark " + sparkVersion,
+            console_process::InteractionNever);
+
    // create and execute console process
    boost::shared_ptr<console_process::ConsoleProcess> pCP;
    pCP = console_process::ConsoleProcess::create(
             string_utils::utf8ToSystem(rProgramPath.absolutePath()),
             args,
             options,
-            "Installing Spark " + sparkVersion,
-            true,
-            console_process::InteractionNever);
+            pCPI);
 
    // return console process
    pResponse->setResult(pCP->toJson());
@@ -555,12 +595,25 @@ void initEnvironment()
 }
 
 
+Error handleConnectionsResourceRequest(const http::Request& request,
+                               http::Response* pResponse)
+{
+   std::string path = http::util::pathAfterPrefix(
+         request, "/" kConnectionsPath "/");
+   core::FilePath res = options().rResourcesPath().complete(kConnectionsPath)
+      .childPath(path);
+   pResponse->setCacheableFile(res, request);
+   return Success();
+}
+
+
 } // anonymous namespace
 
 
 bool connectionsEnabled()
 {
-   return module_context::isPackageVersionInstalled("sparklyr", "0.2.5");
+   return module_context::isPackageVersionInstalled("sparklyr", "0.5.3-9003") ||
+          module_context::isPackageVersionInstalled("odbc", "1.0.1.9000");
 }
 
 bool activateConnections()
@@ -586,11 +639,12 @@ bool isSuspendable()
 Error initialize()
 {
    // register methods
-   RS_REGISTER_CALL_METHOD(rs_connectionOpened, 8);
+   RS_REGISTER_CALL_METHOD(rs_connectionOpened, 1);
    RS_REGISTER_CALL_METHOD(rs_connectionClosed, 2);
    RS_REGISTER_CALL_METHOD(rs_connectionUpdated, 3);
    RS_REGISTER_CALL_METHOD(rs_availableRemoteServers, 0);
-   RS_REGISTER_CALL_METHOD(rs_defaultSparkClusterUrl, 0);
+   RS_REGISTER_CALL_METHOD(rs_availableConnections, 0);
+   RS_REGISTER_CALL_METHOD(rs_connectionIcon, 1);
 
    // initialize environment
    initEnvironment();
@@ -600,26 +654,30 @@ Error initialize()
    if (error)
       return error;
 
-   // deferrred init for updating active connections
-   module_context::events().onDeferredInit.connect(onDeferredInit);
-
    // connect to events to track whether we should enable connections
    s_connectionsInitiallyEnabled = connectionsEnabled();
    module_context::events().onPackageLibraryMutated.connect(
                                              onInstalledPackagesChanged);
+
+   // initialize events for package indexer
+   module_context::events().onDeferredInit.connect(onDeferredInit);
+   
+   // initialize connections index worker
+   registerConnectionsWorker();
 
    using boost::bind;
    using namespace module_context;
    ExecBlock initBlock ;
    initBlock.addFunctions()
       (bind(registerRpcMethod, "remove_connection", removeConnection))
-      (bind(registerRpcMethod, "get_disconnect_code", getDisconnectCode))
-      (bind(registerRpcMethod, "show_spark_log", showSparkLog))
-      (bind(registerRpcMethod, "show_spark_ui", showSparkUI))
-      (bind(registerIdleOnlyAsyncRpcMethod, "connection_list_tables", connectionListTables))
+      (bind(registerRpcMethod, "connection_disconnect", connectionDisconnect))
+      (bind(registerRpcMethod, "connection_execute_action", connectionExecuteAction))
+      (bind(registerIdleOnlyAsyncRpcMethod, "connection_list_objects", connectionListObjects))
       (bind(registerIdleOnlyAsyncRpcMethod, "connection_list_fields", connectionListFields))
-      (bind(registerIdleOnlyAsyncRpcMethod, "connection_preview_table", connectionPreviewTable))
+      (bind(registerIdleOnlyAsyncRpcMethod, "connection_preview_object", connectionPreviewObject))
       (bind(registerRpcMethod, "install_spark", installSpark))
+      (bind(module_context::registerUriHandler, "/" kConnectionsPath, 
+            handleConnectionsResourceRequest))
       (bind(sourceModuleRFile, "SessionConnections.R"));
 
    return initBlock.execute();
@@ -628,6 +686,6 @@ Error initialize()
 
 } // namespace connections
 } // namespace modules
-} // namesapce session
+} // namespace session
 } // namespace rstudio
 

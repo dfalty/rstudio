@@ -1,7 +1,7 @@
 /*
  * SessionConsoleProcess.hpp
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -15,7 +15,9 @@
 #ifndef SESSION_CONSOLE_PROCESS_HPP
 #define SESSION_CONSOLE_PROCESS_HPP
 
-#include <queue>
+#include <session/SessionConsoleProcessInfo.hpp>
+
+#include <deque>
 
 #include <boost/regex.hpp>
 #include <boost/signals.hpp>
@@ -23,9 +25,8 @@
 #include <boost/enable_shared_from_this.hpp>
 
 #include <core/system/Process.hpp>
-#include <core/Log.hpp>
 
-#include <core/json/Json.hpp>
+#include <session/SessionConsoleProcessSocket.hpp>
 
 namespace rstudio {
 namespace core {
@@ -37,14 +38,9 @@ namespace rstudio {
 namespace session {
 namespace console_process {
 
-enum InteractionMode
-{
-   InteractionNever = 0,
-   InteractionPossible = 1,
-   InteractionAlways = 2
-};
-
-extern const int kDefaultMaxOutputLines;
+const int kFlushSequence = -2; // see ShellInput.FLUSH_SEQUENCE
+const int kIgnoreSequence = -1; // see ShellInput.IGNORE_SEQUENCE
+const int kAutoFlushLength = 20;
 
 class ConsoleProcess : boost::noncopyable,
                        public boost::enable_shared_from_this<ConsoleProcess>
@@ -52,25 +48,19 @@ class ConsoleProcess : boost::noncopyable,
 private:
    // This constructor is only for resurrecting orphaned processes (i.e. for
    // suspend/resume scenarios)
-   ConsoleProcess();
+   ConsoleProcess(boost::shared_ptr<ConsoleProcessInfo> procInfo);
 
    ConsoleProcess(
          const std::string& command,
          const core::system::ProcessOptions& options,
-         const std::string& caption,
-         bool dialog,
-         InteractionMode mode,
-         int maxOutputLines);
-
+         boost::shared_ptr<ConsoleProcessInfo> procInfo);
+  
    ConsoleProcess(
          const std::string& program,
          const std::vector<std::string>& args,
          const core::system::ProcessOptions& options,
-         const std::string& caption,
-         bool dialog,
-         InteractionMode mode,
-         int maxOutputLines);
-
+         boost::shared_ptr<ConsoleProcessInfo> procInfo);
+   
    void regexInit();
    void commonInit();
 
@@ -78,17 +68,26 @@ public:
    struct Input
    {
       explicit Input(const std::string& text, bool echoInput = true)
-         : interrupt(false), text(text), echoInput(echoInput)
+         : interrupt(false), text(text), echoInput(echoInput),
+           sequence(kIgnoreSequence)
       {
       }
 
-      Input() : interrupt(false), echoInput(false) {}
+      explicit Input(int sequence, const std::string& text, bool echoInput = true)
+         : interrupt(false), text(text), echoInput(echoInput), sequence(sequence)
+      {
+      }
+
+      Input() : interrupt(false), echoInput(false), sequence(kIgnoreSequence) {}
 
       bool empty() { return !interrupt && text.empty(); }
 
       bool interrupt ;
       std::string text;
       bool echoInput;
+
+      // used to reassemble out-of-order input messages
+      int sequence;
    };
 
 public:
@@ -99,20 +98,19 @@ public:
    static boost::shared_ptr<ConsoleProcess> create(
          const std::string& command,
          core::system::ProcessOptions options,
-         const std::string& caption,
-         bool dialog,
-         InteractionMode mode,
-         int maxOutputLines = kDefaultMaxOutputLines);
+         boost::shared_ptr<ConsoleProcessInfo> procInfo);
 
    static boost::shared_ptr<ConsoleProcess> create(
          const std::string& program,
          const std::vector<std::string>& args,
          core::system::ProcessOptions options,
-         const std::string& caption,
-         bool dialog,
-         InteractionMode mode,
-         int maxOutputLines = kDefaultMaxOutputLines);
+         boost::shared_ptr<ConsoleProcessInfo> procInfo);
 
+   static boost::shared_ptr<ConsoleProcess> createTerminalProcess(
+         core::system::ProcessOptions options,
+         boost::shared_ptr<ConsoleProcessInfo> procInfo,
+         bool enableWebsockets = true);
+   
    virtual ~ConsoleProcess() {}
 
    // set a custom prompt handler -- return true to indicate the prompt
@@ -124,19 +122,33 @@ public:
 
    boost::signal<void(int)>& onExit() { return onExit_; }
 
-   std::string handle() const { return handle_; }
-   InteractionMode interactionMode() const { return interactionMode_; }
+   std::string handle() const { return procInfo_->getHandle(); }
+   InteractionMode interactionMode() const { return procInfo_->getInteractionMode(); }
 
    core::Error start();
    void enqueInput(const Input& input);
+   Input dequeInput();
+   void enquePrompt(const std::string& prompt);
    void interrupt();
    void resize(int cols, int rows);
+   void onSuspend();
+   bool isStarted() { return started_; }
+   void setCaption(std::string& caption) { procInfo_->setCaption(caption); }
+   void setTitle(std::string& title) { procInfo_->setTitle(title); }
+   void deleteLogFile() const;
+   void setNotBusy() { procInfo_->setHasChildProcs(false); }
 
-   void setShowOnOutput(bool showOnOutput) { showOnOutput_ = showOnOutput; }
+   // Used to downgrade to RPC mode after failed attempt to connect websocket
+   void setRpcMode();
+
+   // Get the given (0-based) chunk of the saved buffer; if more is available
+   // after the requested chunk, *pMoreAvailable will be set to true
+   std::string getSavedBufferChunk(int chunk, bool* pMoreAvailable) const;
+
+   void setShowOnOutput(bool showOnOutput) { procInfo_->setShowOnOutput(showOnOutput); }
 
    core::json::Object toJson() const;
-   static boost::shared_ptr<ConsoleProcess> fromJson(
-                                              core::json::Object& obj);
+   static boost::shared_ptr<ConsoleProcess> fromJson( core::json::Object& obj);
 
 private:
    core::system::ProcessCallbacks createProcessCallbacks();
@@ -144,14 +156,21 @@ private:
    void onStdout(core::system::ProcessOperations& ops,
                  const std::string& output);
    void onExit(int exitCode);
+   void onHasSubprocs(bool hasSubProcs);
+   void processQueuedInput(core::system::ProcessOperations& ops);
 
    std::string bufferedOutput() const;
-   void appendToOutputBuffer(const std::string& str);
-   void enqueOutputEvent(const std::string& output, bool error);
+   void enqueOutputEvent(const std::string& output);
+   void enquePromptEvent(const std::string& prompt);
    void handleConsolePrompt(core::system::ProcessOperations& ops,
                             const std::string& prompt);
    void maybeConsolePrompt(core::system::ProcessOperations& ops,
                            const std::string& output);
+
+   ConsoleProcessSocketConnectionCallbacks createConsoleProcessSocketConnectionCallbacks();
+   void onReceivedInput(const std::string& input);
+   void onConnectionOpened();
+   void onConnectionClosed();
 
 private:
    // Command and options that will be used when start() is called
@@ -159,18 +178,7 @@ private:
    std::string program_;
    std::vector<std::string> args_;
    core::system::ProcessOptions options_;
-
-   std::string caption_;
-   bool dialog_;
-   bool showOnOutput_;
-   InteractionMode interactionMode_;
-   int maxOutputLines_;
-
-   // The handle that the client can use to refer to this process
-   std::string handle_;
-
-   // Whether the process has been successfully started
-   bool started_;
+   boost::shared_ptr<ConsoleProcessInfo> procInfo_;
 
    // Whether the process should be stopped
    bool interrupt_;
@@ -179,22 +187,26 @@ private:
    int newCols_; // -1 = no change
    int newRows_; // -1 = no change
 
+   // Has client been notified of state of childProcs_ at least once?
+   bool childProcsSent_;
+
    // Pending input (writes or ptyInterrupts)
-   std::queue<Input> inputQueue_;
-
-   // Buffer output in case client disconnects/reconnects and needs
-   // to recover some history
-   boost::circular_buffer<char> outputBuffer_;
-
-   boost::optional<int> exitCode_;
+   std::deque<Input> inputQueue_;
+   int lastInputSequence_;
 
    boost::function<bool(const std::string&, Input*)> onPrompt_;
    boost::signal<void(int)> onExit_;
 
-
    // regex for prompt detection
    boost::regex controlCharsPattern_;
    boost::regex promptPattern_;
+
+   // is the underlying process started?
+   bool started_;
+
+   // cached pointer to process options, for use in websocket thread callbacks
+   boost::weak_ptr<core::system::ProcessOperations> pOps_;
+   boost::mutex mutex_;
 };
 
 

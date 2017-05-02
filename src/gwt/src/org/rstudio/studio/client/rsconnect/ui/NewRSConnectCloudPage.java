@@ -14,6 +14,7 @@
  */
 package org.rstudio.studio.client.rsconnect.ui;
 
+import org.rstudio.core.client.resources.ImageResource2x;
 import org.rstudio.core.client.widget.WizardPage;
 import org.rstudio.studio.client.rsconnect.RSConnect;
 import org.rstudio.studio.client.rsconnect.model.NewRSConnectAccountInput;
@@ -31,8 +32,8 @@ public class NewRSConnectCloudPage
             "A cloud service run by RStudio. Publish Shiny applications " +
             "and interactive documents to the Internet.",
             "Connect ShinyApps.io Account",
-            RSConnectResources.INSTANCE.cloudAccountIcon(), 
-            RSConnectResources.INSTANCE.cloudAccountIconLarge());
+            new ImageResource2x(RSConnectResources.INSTANCE.cloudAccountIcon2x()), 
+            new ImageResource2x(RSConnectResources.INSTANCE.cloudAccountIconLarge2x()));
    }
 
    @Override

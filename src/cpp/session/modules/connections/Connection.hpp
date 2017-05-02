@@ -1,7 +1,7 @@
 /*
  * Connection.hpp
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-16 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -50,24 +50,48 @@ struct ConnectionId
    }
 };
 
+struct ConnectionAction
+{
+   ConnectionAction() {}
+   ConnectionAction(const std::string& name, const std::string& icon)
+      : name(name), icon(icon)
+   {
+   }
+
+   std::string name;
+   std::string icon;
+};
+
+struct ConnectionObjectType
+{
+   ConnectionObjectType() {}
+   ConnectionObjectType(const std::string& name, const std::string& contains,
+         const std::string& icon)
+      : name(name), contains(contains), icon(icon)
+   {
+   }
+
+   std::string name;
+   std::string contains;
+   std::string icon;
+};
+
 struct Connection
 {
    Connection() {}
    Connection(const ConnectionId& id,
-              const std::string& finder,
               const std::string& connectCode,
-              const std::string& disconnectCode,
-              const std::string& listTablesCode,
-              const std::string& listColumnsCode,
-              const std::string& previewTableCode,
+              const std::string& displayName,
+              const std::string& icon,
+              const std::vector<ConnectionAction>& actions,
+              const std::vector<ConnectionObjectType>& objectTypes,
               double lastUsed)
       : id(id),
-        finder(finder),
         connectCode(connectCode),
-        disconnectCode(disconnectCode),
-        listTablesCode(listTablesCode),
-        listColumnsCode(listColumnsCode),
-        previewTableCode(previewTableCode),
+        displayName(displayName),
+        icon(icon),
+        actions(actions),
+        objectTypes(objectTypes),
         lastUsed(lastUsed)
    {
    }
@@ -75,12 +99,11 @@ struct Connection
    bool empty() const { return id.empty(); }
 
    ConnectionId id;
-   std::string finder;
    std::string connectCode;
-   std::string disconnectCode;
-   std::string listTablesCode;
-   std::string listColumnsCode;
-   std::string previewTableCode;
+   std::string displayName;
+   std::string icon;
+   std::vector<ConnectionAction> actions;
+   std::vector<ConnectionObjectType> objectTypes;
    double lastUsed;
 };
 
@@ -89,14 +112,19 @@ core::json::Object connectionJson(const Connection& connection);
 
 core::Error connectionFromJson(const core::json::Object& connectionJson,
                                Connection* pConnection);
+core::Error connectionIdFromJson(const core::json::Object& connectionIdJson,
+                               ConnectionId* pConnectionId);
 
 bool hasConnectionId(const ConnectionId& id,
                      const core::json::Object& connectionJson);
 
+std::string iconData(const std::string& iconGroup,
+                     const std::string& iconName,
+                     const std::string& iconPath);
                        
 } // namespace connections
 } // namespace modules
-} // namesapce session
+} // namespace session
 } // namespace rstudio
 
 #endif // SESSION_CONNECTIONS_CONNECTION_HPP

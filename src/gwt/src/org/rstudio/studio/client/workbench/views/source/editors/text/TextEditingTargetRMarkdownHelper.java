@@ -75,6 +75,7 @@ import org.rstudio.studio.client.workbench.prefs.model.UIPrefs;
 import org.rstudio.studio.client.workbench.prefs.model.UIPrefsAccessor;
 import org.rstudio.studio.client.workbench.views.files.model.FilesServerOperations;
 import org.rstudio.studio.client.workbench.views.source.editors.text.ace.Position;
+import org.rstudio.studio.client.workbench.views.source.editors.text.ui.NewRMarkdownDialog;
 import org.rstudio.studio.client.workbench.views.source.events.FileEditEvent;
 import org.rstudio.studio.client.workbench.views.source.model.DocUpdateSentinel;
 
@@ -194,7 +195,8 @@ public class TextEditingTargetRMarkdownHelper
          });
    }
    
-   public void renderNotebookv2(final DocUpdateSentinel sourceDoc)
+   public void renderNotebookv2(final DocUpdateSentinel sourceDoc,
+         final String viewerType)
    { 
       withRMarkdownPackage("Compiling notebooks from R scripts",
                            false,
@@ -212,7 +214,7 @@ public class TextEditingTargetRMarkdownHelper
                         if (format == null)
                            renderNotebookv2WithDialog(sourceDoc);
                         else
-                           renderNotebookv2(sourceDoc, format);
+                           renderNotebookv2(sourceDoc, format, viewerType);
                      }
                });
             }
@@ -241,7 +243,7 @@ public class TextEditingTargetRMarkdownHelper
          @Override
          public void execute(CompileNotebookv2Options input)
          { 
-            renderNotebookv2(sourceDoc, input.getFormat());
+            renderNotebookv2(sourceDoc, null, input.getFormat());
             
             // save options for this document
             HashMap<String, String> changedProperties 
@@ -266,7 +268,7 @@ public class TextEditingTargetRMarkdownHelper
    }
    
    private void renderNotebookv2(final DocUpdateSentinel sourceDoc,
-                                 String format)
+                                 String format, String viewerType)
    {
       eventBus_.fireEvent(new RenderRmdEvent(sourceDoc.getPath(), 
                                              1, 
@@ -276,7 +278,8 @@ public class TextEditingTargetRMarkdownHelper
                                              false,
                                              RmdOutput.TYPE_STATIC,
                                              null,
-                                             getKnitWorkingDir(sourceDoc)));
+                                             getKnitWorkingDir(sourceDoc),
+                                             viewerType));
    }
    
    public String getKnitWorkingDir(DocUpdateSentinel sourceDoc)
@@ -295,7 +298,10 @@ public class TextEditingTargetRMarkdownHelper
       {
          // get the project directory, but if we don't have one (e.g. no
          // project) use the default working directory for the session
-         workingDir = session_.getSessionInfo().getActiveProjectDir().getPath();
+         FileSystemItem projectDir = 
+               session_.getSessionInfo().getActiveProjectDir();
+         if (projectDir != null)
+            workingDir = projectDir.getPath();
          if (StringUtil.isNullOrEmpty(workingDir))
             workingDir = session_.getSessionInfo().getDefaultWorkingDir();
       }
@@ -314,7 +320,8 @@ public class TextEditingTargetRMarkdownHelper
                                final boolean asTempfile,
                                final int type,
                                final boolean asShiny,
-                               final String workingDir)
+                               final String workingDir,
+                               final String viewerType)
    {
       withRMarkdownPackage(type == RmdOutput.TYPE_NOTEBOOK ?
                               "R Notebook" :
@@ -333,7 +340,8 @@ public class TextEditingTargetRMarkdownHelper
                                                    asTempfile,
                                                    type,
                                                    null,
-                                                   workingDir));
+                                                   workingDir,
+                                                   viewerType));
          }
       });
    }
@@ -1043,7 +1051,28 @@ public class TextEditingTargetRMarkdownHelper
          outputs.add(tree.getKeyValue(RmdFrontMatter.OUTPUT_KEY));
       return outputs;
    }
-              
+   
+   public void showNewRMarkdownDialog(
+         final OperationWithInput<NewRMarkdownDialog.Result> onComplete)
+   {
+      withRMarkdownPackage(
+         "Creating R Markdown documents",
+         false,
+         new CommandWithArg<RMarkdownContext>()
+      {
+         @Override
+         public void execute(RMarkdownContext context)
+         {
+            new NewRMarkdownDialog(
+               server_,
+               context,
+               workbenchContext_,
+               prefs_.documentAuthor().getGlobalValue(), 
+               onComplete).showModal();
+         }
+      });
+}
+
    private void showKnitrPreviewWarning(WarningBarDisplay display,
                                         String feature, 
                                         String requiredVersion)

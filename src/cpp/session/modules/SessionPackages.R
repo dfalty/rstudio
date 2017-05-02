@@ -280,7 +280,7 @@ if (identical(as.character(Sys.info()["sysname"]), "Darwin") &&
 
    # get packages
    x <- suppressWarnings(library(lib.loc=uniqueLibPaths))
-   x <- x$results[x$results[, 1] != "base", ]
+   x <- x$results[x$results[, 1] != "base", , drop=FALSE]
    
    # extract/compute required fields 
    pkgs.name <- x[, 1]
@@ -298,12 +298,9 @@ if (identical(as.character(Sys.info()["sysname"]), "Darwin") &&
 
    # build up vector of package versions
    instPkgs <- as.data.frame(installed.packages(), stringsAsFactors=F)
-   pkgs.version <- character(length=length(pkgs.name))
-   for (i in 1:length(pkgs.name)) {
-      pkgs.version[[i]] <- .rs.packageVersion(pkgs.name[[i]],
-                                              pkgs.library[[i]],
-                                              instPkgs)
-   }
+   pkgs.version <- sapply(seq_along(pkgs.name), function(i){
+     .rs.packageVersion(pkgs.name[[i]], pkgs.library[[i]], instPkgs)
+   })
    
    # alias library paths for the client
    pkgs.library <- .rs.createAliasedPath(pkgs.library)
@@ -423,7 +420,12 @@ if (identical(as.character(Sys.info()["sysname"]), "Darwin") &&
    row.names(updates) <- NULL
    
    # see which ones are from CRAN and add a news column for them
-   cranRep <- getOption("repos")["CRAN"]
+   # NOTE: defend against length-one repos with no name set
+   repos <- getOption("repos")
+   if ("CRAN" %in% names(repos))
+      cranRep <- repos["CRAN"]
+   else
+      cranRep <- c(CRAN = repos[[1]])
    cranRepLen <- nchar(cranRep)
    isFromCRAN <- cranRep == substr(updates$Repository, 1, cranRepLen)
    newsURL <- character(nrow(updates))
@@ -1129,7 +1131,7 @@ if (identical(as.character(Sys.info()["sysname"]), "Darwin") &&
    
 
 .rs.addFunction("downloadFileExtraWithCurlArgs", function() {
-   newArgs <- "-L -f"
+   newArgs <- "-L -f -g"
    curArgs <- getOption("download.file.extra")
    if (!is.null(curArgs) && !grepl(newArgs, curArgs, fixed = TRUE))
       curArgs <- paste(newArgs, curArgs)

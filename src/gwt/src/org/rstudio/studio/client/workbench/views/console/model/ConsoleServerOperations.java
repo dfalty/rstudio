@@ -1,7 +1,7 @@
 /*
  * ConsoleServerOperations.java
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -50,4 +50,39 @@ public interface ConsoleServerOperations extends CodeToolsServerOperations,
                             int width,
                             int height,
                             ServerRequestCallback<Void> requestCallback);
+
+   void processEraseBuffer(String handle,
+                           ServerRequestCallback<Void> requestCallback);
+
+   void processGetBufferChunk(String handle,
+                              int chunk,
+                              ServerRequestCallback<ProcessBufferChunk> requestCallback);
+   
+   /**
+    * Switch a server process to use Rpc mode after failing to connect to
+    * non-rpc channel such as websocket.
+    * @param handle process handle
+    * @param requestCallback
+    */
+   void processUseRpc(String handle,
+                      ServerRequestCallback<Void> requestCallback);
+
+   /**
+    * Set/update the caption of given process.
+    * @param handle process handle
+    * @param caption new caption
+    * @param requestCallback response
+    */
+   void processSetCaption(String handle,
+                          String caption,
+                          ServerRequestCallback<Void> requestCallback);
+   /**
+    * Set/update the title of given process.
+    * @param handle process handle
+    * @param title new title
+    * @param requestCallback response
+    */
+   void processSetTitle(String handle,
+                        String title,
+                        ServerRequestCallback<Void> requestCallback);
 }

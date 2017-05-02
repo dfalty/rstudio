@@ -204,6 +204,7 @@ std::vector<RVersion> enumerateRVersions(
             std::string versionNumber = version.number();
             Error error = rVersion(rHomePath,
                                    rBinaryPath,
+                                   ldLibraryPath,
                                    &versionNumber);
             if (error)
                LOG_ERROR(error);
@@ -242,8 +243,8 @@ bool isVersion(const RVersionNumber& number,
 bool isMajorMinorVersion(const RVersionNumber& test, const RVersion& item)
 {
    RVersionNumber itemNumber = RVersionNumber::parse(item.number());
-   return (test.major() == itemNumber.major() &&
-           test.minor() == itemNumber.minor());
+   return (test.versionMajor() == itemNumber.versionMajor() &&
+           test.versionMinor() == itemNumber.versionMinor());
 }
 
 

@@ -24,6 +24,7 @@ import org.rstudio.core.client.command.Handler;
 import org.rstudio.core.client.events.BarrierReleasedEvent;
 import org.rstudio.core.client.events.BarrierReleasedHandler;
 import org.rstudio.core.client.files.FileSystemItem;
+import org.rstudio.core.client.resources.ImageResource2x;
 import org.rstudio.core.client.widget.MessageDialog;
 import org.rstudio.core.client.widget.Operation;
 import org.rstudio.core.client.widget.OperationWithInput;
@@ -125,14 +126,26 @@ public class ApplicationQuit implements SaveActionChangedHandler,
                               final boolean forceSaveAll,
                               final QuitContext quitContext)
    {
+      boolean busy = workbenchContext_.isServerBusy() || workbenchContext_.isTerminalBusy();
+      String msg = null;
+      if (busy)
+      {
+         if (workbenchContext_.isServerBusy() && !workbenchContext_.isTerminalBusy())
+            msg = "The R session is currently busy.";
+         else if (workbenchContext_.isServerBusy() && workbenchContext_.isTerminalBusy())
+            msg = "The R session and the terminal are currently busy.";
+         else 
+            msg = "The terminal is currently busy.";
+      }
+
       eventBus_.fireEvent(new QuitInitiatedEvent());
       
-      if (workbenchContext_.isServerBusy() && !forceSaveAll)
+      if (busy && !forceSaveAll)
       {
          globalDisplay_.showYesNoMessage(
                MessageDialog.QUESTION,
                caption, 
-               "The R session is currently busy. Are you sure you want to quit?", 
+               msg + " Are you sure you want to quit?",
                new Operation() {
                   @Override
                   public void execute()
@@ -161,7 +174,6 @@ public class ApplicationQuit implements SaveActionChangedHandler,
       }
    }
    
-     
    private void handleUnsavedChanges(String caption, 
                                      boolean forceSaveAll,
                                      QuitContext quitContext)
@@ -622,7 +634,7 @@ public class ApplicationQuit implements SaveActionChangedHandler,
       @Override
       public ImageResource getIcon()
       {
-         return FileIconResources.INSTANCE.iconRdata(); 
+         return new ImageResource2x(FileIconResources.INSTANCE.iconRdata2x()); 
       }
 
       @Override

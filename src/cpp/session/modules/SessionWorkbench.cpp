@@ -1,7 +1,7 @@
 /*
  * SessionWorkbench.cpp
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -47,6 +47,7 @@
 #include <session/SessionUserSettings.hpp>
 #include <session/SessionConsoleProcess.hpp>
 #include <session/RVersionSettings.hpp>
+#include <session/SessionTerminalShell.hpp>
 
 #include "SessionVCS.hpp"
 #include "SessionGit.hpp"
@@ -262,7 +263,8 @@ Error setPrefs(const json::JsonRpcRequest& request, json::JsonRpcResponse*)
 {
    // read params
    json::Object generalPrefs, historyPrefs, editingPrefs, packagesPrefs,
-                projectsPrefs, sourceControlPrefs, compilePdfPrefs;
+                projectsPrefs, sourceControlPrefs, compilePdfPrefs,
+                terminalPrefs;
    Error error = json::readObjectParam(request.params, 0,
                               "general_prefs", &generalPrefs,
                               "history_prefs", &historyPrefs,
@@ -270,7 +272,8 @@ Error setPrefs(const json::JsonRpcRequest& request, json::JsonRpcResponse*)
                               "packages_prefs", &packagesPrefs,
                               "projects_prefs", &projectsPrefs,
                               "source_control_prefs", &sourceControlPrefs,
-                              "compile_pdf_prefs", &compilePdfPrefs);
+                              "compile_pdf_prefs", &compilePdfPrefs,
+                              "terminal_prefs", &terminalPrefs);
    if (error)
       return error;
    json::Object uiPrefs;
@@ -459,6 +462,17 @@ Error setPrefs(const json::JsonRpcRequest& request, json::JsonRpcResponse*)
    userSettings().setEnableLaTeXShellEscape(enableShellEscape);
    userSettings().endUpdate();
 
+   // read and update terminal prefs
+   int defaultTerminalShell;
+   error = json::readObject(terminalPrefs,
+                            "default_shell", &defaultTerminalShell);
+   if (error)
+      return error;
+   userSettings().beginUpdate();
+   userSettings().setDefaultTerminalShellValue(
+      static_cast<console_process::TerminalShell::TerminalShellType>(defaultTerminalShell));
+   userSettings().endUpdate();
+
    // set ui prefs
    userSettings().setUiPrefs(uiPrefs);
 
@@ -586,6 +600,10 @@ Error getRPrefs(const json::JsonRpcRequest& request,
    compilePdfPrefs["clean_output"] = userSettings().cleanTexi2DviOutput();
    compilePdfPrefs["enable_shell_escape"] = userSettings().enableLaTeXShellEscape();
 
+   // get terminal prefs
+   json::Object terminalPrefs;
+   terminalPrefs["default_shell"] = userSettings().defaultTerminalShellValue();
+
    // initialize and set result object
    json::Object result;
    result["general_prefs"] = generalPrefs;
@@ -597,6 +615,7 @@ Error getRPrefs(const json::JsonRpcRequest& request,
    result["compile_pdf_prefs"] = compilePdfPrefs;
    result["spelling_prefs_context"] =
                   session::modules::spelling::spellingPrefsContextAsJson();
+   result["terminal_prefs"] = terminalPrefs;
 
    pResponse->setResult(result);
 
@@ -633,9 +652,7 @@ Error getTerminalOptions(const json::JsonRpcRequest& request,
    // if we are using git bash then return its path
    if (git::isGitEnabled() && userSettings().vcsUseGitBash())
    {
-      FilePath gitExePath = git::detectedGitExePath();
-      if (!gitExePath.empty())
-         terminalPath = gitExePath.parent().childPath("sh.exe");
+      terminalPath = console_process::getGitBashShell();
    }
 
 #elif defined(__APPLE__)
@@ -661,6 +678,16 @@ Error getTerminalOptions(const json::JsonRpcRequest& request,
    optionsJson["extra_path_entries"] = extraPathEntries;
    pResponse->setResult(optionsJson);
 
+   return Success();
+}
+
+Error getTerminalShells(const json::JsonRpcRequest& request,
+                        json::JsonRpcResponse* pResponse)
+{
+   console_process::AvailableTerminalShells availableShells;
+   json::Array shells;
+   availableShells.toJson(&shells);
+   pResponse->setResult(shells);
    return Success();
 }
 
@@ -851,57 +878,58 @@ void editFilePostback(const std::string& file,
    cont(EXIT_SUCCESS, "");
 }
 
-Error startShellDialog(const json::JsonRpcRequest& request,
-                       json::JsonRpcResponse* pResponse)
+Error startTerminal(const json::JsonRpcRequest& request,
+                    json::JsonRpcResponse* pResponse)
 {
-#ifndef _WIN32
    using namespace session::module_context;
    using namespace session::console_process;
 
-   // TERM setting, must correspond to one of the values in the
-   // client-side enum TerminalType. For now we treat XTERM as a
-   // "smart terminal" and anything else as DUMB (RStudio 1.0 behavior).
-   std::string term;
-   
-   // initial size of the pseudo-terminal
-   int cols, rows;
-   
-   // is terminal hosted in a modal dialog? (false means modeless, e.g. a tab)
-   bool isModalDialog;
+   int shellTypeInt;
+   int cols, rows; // initial pseudo-terminal size
+   std::string termHandle; // empty if starting a new terminal
+   std::string termCaption;
+   std::string termTitle;
+   bool useWebsockets;
+   int termSequence = kNoTerminal;
    
    Error error = json::readParams(request.params,
-                                  &term,
+                                  &shellTypeInt,
                                   &cols,
                                   &rows,
-                                  &isModalDialog);
+                                  &termHandle,
+                                  &termCaption,
+                                  &termTitle,
+                                  &useWebsockets,
+                                  &termSequence);
    if (error)
       return error;
-   
-   bool smartTerm = !term.compare("XTERM");
+
+   TerminalShell::TerminalShellType shellType =
+         static_cast<TerminalShell::TerminalShellType>(shellTypeInt);
+   if (shellType < TerminalShell::DefaultShell || shellType > TerminalShell::Max)
+   {
+       shellType = TerminalShell::DefaultShell;
+   }
    
    // configure environment for shell
    core::system::Options shellEnv;
    core::system::environment(&shellEnv);
 
-   // set terminal
-   core::system::setenv(&shellEnv, "TERM", smartTerm ? "xterm" : "dumb");
-
-   // set prompt
-   std::string path = module_context::createAliasedPath(
-                                 module_context::safeCurrentPath());
-   std::string prompt = (path.length() > 30) ? "\\W$ " : "\\w$ ";
-   core::system::setenv(&shellEnv, "PS1", prompt);
-
-   // disable screen oriented facillites		
-   if (!smartTerm)
-   {
-      core::system::unsetenv(&shellEnv, "EDITOR");
-      core::system::unsetenv(&shellEnv, "VISUAL");
-      core::system::setenv(&shellEnv, "PAGER", "/bin/cat");
-   }
+#ifndef _WIN32
+   // set xterm title to show current working directory after each command
+   core::system::setenv(&shellEnv, "PROMPT_COMMAND",
+                        "echo -ne \"\\033]0;${PWD/#${HOME}/~}\\007\"");
+   
    core::system::setenv(&shellEnv, "GIT_EDITOR", s_editFileCommand);
    core::system::setenv(&shellEnv, "SVN_EDITOR", s_editFileCommand);
+#endif
 
+   if (termSequence != kNoTerminal)
+   {
+      core::system::setenv(&shellEnv, "RSTUDIO_TERM",
+                           boost::lexical_cast<std::string>(termSequence));
+   }
+   
    // ammend shell paths as appropriate
    ammendShellPaths(&shellEnv);
 
@@ -909,23 +937,44 @@ Error startShellDialog(const json::JsonRpcRequest& request,
    core::system::ProcessOptions options;
    options.workingDir = module_context::shellWorkingDirectory();
    options.environment = shellEnv;
-   options.smartTerminal = smartTerm;
+   options.smartTerminal = true;
+   options.reportHasSubprocs = true;
    options.cols = cols;
    options.rows = rows;
 
-   // configure bash command
-   core::shell_utils::ShellCommand bashCommand("/usr/bin/env");
-   bashCommand << "bash";
-   bashCommand << "--norc";
+   // set path to shell
+   AvailableTerminalShells shells;
+   TerminalShell shell;
+   if (shells.getInfo(shellType, &shell))
+   {
+      options.shellPath = shell.path;
+      options.args = shell.args;
+   }
+
+   // last-ditch, use system shell
+   if (!options.shellPath.exists())
+   {
+      TerminalShell sysShell;
+      if (AvailableTerminalShells::getSystemShell(&sysShell))
+      {
+         options.shellPath = sysShell.path;
+         options.args = sysShell.args;
+      }
+   }
+
+   if (termCaption.empty())
+      termCaption = "Shell";
+
+   boost::shared_ptr<ConsoleProcessInfo> ptrProcInfo =
+         boost::make_shared<ConsoleProcessInfo>(
+            termCaption, termTitle, termHandle, termSequence,  shellType,
+            console_process::Rpc, "" /*channelId*/,
+            console_process::kDefaultTerminalMaxOutputLines);
 
    // run process
+   bool websockets = session::options().allowTerminalWebsockets() && useWebsockets;
    boost::shared_ptr<ConsoleProcess> ptrProc =
-               ConsoleProcess::create(bashCommand,
-                                      options,
-                                      "Shell",
-                                      isModalDialog,
-                                      InteractionAlways,
-                                      console_process::kDefaultMaxOutputLines);
+               ConsoleProcess::createTerminalProcess(options, ptrProcInfo, websockets);
 
    ptrProc->onExit().connect(boost::bind(
                               &source_control::enqueueRefreshEvent));
@@ -933,9 +982,6 @@ Error startShellDialog(const json::JsonRpcRequest& request,
    pResponse->setResult(ptrProc->toJson());
 
    return Success();
-#else // not supported on Win32
-   return Error(json::errc::InvalidRequest, ERROR_LOCATION);
-#endif
 }
 
 Error setCRANMirror(const json::JsonRpcRequest& request,
@@ -1056,15 +1102,16 @@ Error initialize()
       (bind(registerRpcMethod, "get_r_prefs", getRPrefs))
       (bind(registerRpcMethod, "set_cran_mirror", setCRANMirror))
       (bind(registerRpcMethod, "get_terminal_options", getTerminalOptions))
+      (bind(registerRpcMethod, "get_terminal_shells", getTerminalShells))
       (bind(registerRpcMethod, "create_ssh_key", createSshKey))
-      (bind(registerRpcMethod, "start_shell_dialog", startShellDialog))
+      (bind(registerRpcMethod, "start_terminal", startTerminal))
       (bind(registerRpcMethod, "execute_code", executeCode));
    return initBlock.execute();
 }
 
 
-} // namepsace workbench
+} // namespace workbench
 } // namespace modules
-} // namesapce session
+} // namespace session
 } // namespace rstudio
 

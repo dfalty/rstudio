@@ -2,9 +2,15 @@
 @external gwt-DialogBox;
 @external gwt-MenuItem-selected;
 @external breadcrumb, breadcrumb-filepane;
+@external rstudio-themes-flat, rstudio-themes-dark;
+@external rstudio-themes-default, rstudio-themes-dark-grey, rstudio-themes-alternate;
 
-@url DIRSEPARATOR dirseparator;
-@url HOME home;
+@eval THEME_DEFAULT_BORDER org.rstudio.core.client.theme.ThemeColors.getDefaultBorder();
+@eval THEME_DARKGREY_BORDER org.rstudio.core.client.theme.ThemeColors.getDarkGreyBorder();
+@eval THEME_ALTERNATE_BORDER org.rstudio.core.client.theme.ThemeColors.getAlternateBorder();
+
+@url DIRSEPARATOR dirseparator2x;
+@url HOME home2x;
 
 .contents, .filename {
    background-color: white;
@@ -44,7 +50,7 @@
 }
 
 .columnIcon {
-   width: 20px;
+   width: 16px;
 }
 
 .columnName {
@@ -89,6 +95,9 @@
    background-color: #eeeff1;
    font-size: 11px;
 }
+.rstudio-themes-flat .breadcrumb {
+   background: none;
+}
 .breadcrumb, .breadcrumb table, .breadcrumb td {
    height: 20px;
 }
@@ -108,6 +117,7 @@
    padding: 3px 6px 0 11px;
    height: 18px;
    background: DIRSEPARATOR center left no-repeat;
+   background-size: 6px 9px;
 }
 
 .breadcrumb table.path a
@@ -115,9 +125,15 @@
    color: #0945bf;
 }
 
+.rstudio-themes-flat .rstudio-themes-dark .breadcrumb table.path a
+{
+   color: rgb(191,211,232);
+}
+
 .breadcrumb table.path .home {
    padding-left: 28px;
    background: HOME 0 1px no-repeat;
+   background-size: 24px 18px;
 }
 
 .project {
@@ -142,4 +158,38 @@
 }
 
 .browse {
+}
+
+.browse {
+   color: #000;
+   float: right;
+   padding-left: 5px;
+   padding-right: 5px;
+   border: none;
+   border-left: solid 1px #c2c7cb;
+   background: none;
+   width: 20px;
+   height: 20px;
+   overflow: hidden;
+   margin-top: 0px;
+}
+
+button.browse:focus {
+   outline:0;
+}
+
+.rstudio-themes-flat .rstudio-themes-dark .browse {
+   color: #FFF;
+}
+
+.rstudio-themes-flat .rstudio-themes-default .browse {
+   border-color: THEME_DEFAULT_BORDER;
+}
+
+.rstudio-themes-flat .rstudio-themes-dark-grey .browse {
+   border-color: THEME_DARKGREY_BORDER;
+}
+
+.rstudio-themes-flat .rstudio-themes-alternate .browse {
+   border-color: THEME_ALTERNATE_BORDER;
 }

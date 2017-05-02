@@ -1,7 +1,7 @@
 /*
  * ConsoleProcess.java
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -14,12 +14,6 @@
  */
 package org.rstudio.studio.client.common.console;
 
-import com.google.gwt.core.client.JsArray;
-import com.google.gwt.event.shared.GwtEvent;
-import com.google.gwt.event.shared.HandlerManager;
-import com.google.gwt.event.shared.HandlerRegistration;
-import com.google.inject.Inject;
-import com.google.inject.Singleton;
 import org.rstudio.core.client.Debug;
 import org.rstudio.core.client.HandlerRegistrations;
 import org.rstudio.core.client.StringUtil;
@@ -37,7 +31,15 @@ import org.rstudio.studio.client.workbench.events.SessionInitEvent;
 import org.rstudio.studio.client.workbench.events.SessionInitHandler;
 import org.rstudio.studio.client.workbench.model.Session;
 import org.rstudio.studio.client.workbench.views.console.model.ConsoleServerOperations;
+import org.rstudio.studio.client.workbench.views.console.model.ProcessBufferChunk;
 import org.rstudio.studio.client.workbench.views.vcs.common.ConsoleProgressDialog;
+
+import com.google.gwt.core.client.JsArray;
+import com.google.gwt.event.shared.GwtEvent;
+import com.google.gwt.event.shared.HandlerManager;
+import com.google.gwt.event.shared.HandlerRegistration;
+import com.google.inject.Inject;
+import com.google.inject.Singleton;
 
 public class ConsoleProcess implements ConsoleOutputEvent.HasHandlers,
                                        ConsolePromptEvent.HasHandlers,
@@ -60,7 +62,6 @@ public class ConsoleProcess implements ConsoleOutputEvent.HasHandlers,
                                    final SatelliteManager satelliteManager)
       {
          server_ = server;
-         cryptoServer_ = cryptoServer;
          eventBus_ = eventBus;
 
          eventBus_.addHandler(SessionInitEvent.TYPE, new SessionInitHandler()
@@ -74,7 +75,13 @@ public class ConsoleProcess implements ConsoleOutputEvent.HasHandlers,
                for (int i = 0; i < procs.length(); i++)
                {
                   final ConsoleProcessInfo proc = procs.get(i);
-
+                  if (proc.isTerminal())
+                  {
+                     // non-modal processes represent terminals and are handled
+                     // by the terminal UI
+                     continue;
+                  }
+                  
                   connectToProcess(
                         proc,
                         new ServerRequestCallback<ConsoleProcess>()
@@ -83,81 +90,60 @@ public class ConsoleProcess implements ConsoleOutputEvent.HasHandlers,
                            public void onResponseReceived(
                                  final ConsoleProcess cproc)
                            {
-                              if (proc.isDialog())
+                              // first determine whether to create and/or
+                              // show the dialog immediately
+                              boolean createDialog = false;
+                              boolean showDialog = false;
+
+                              // standard dialog -- always show it
+                              if (!proc.getShowOnOutput())
                               {
-                                 // first determine whether to create and/or
-                                 // show the dialog immediately
-                                 boolean createDialog = false;
-                                 boolean showDialog = false;
-                                 
-                                 // standard dialog -- always show it
-                                 if (!proc.getShowOnOutput())
-                                 {
-                                    createDialog = true;
-                                    showDialog = true;
-                                 }
-                                 
-                                 // showOnOutput dialog that already has 
-                                 // output -- make sure the user sees it
-                                 //
-                                 // NOTE: we have to trim the  buffered output
-                                 // for the comparison because when the password
-                                 // manager provides a password the back-end
-                                 // process sometimes echos a newline back to us
-                                 //
-                                 else if (proc.getBufferedOutput().trim().length() > 0)
-                                 {
-                                    createDialog = true;
-                                    showDialog = true;
-                                 }
-                                 
-                                 // showOnOutput dialog that has exited
-                                 // and has no output -- reap it
-                                 else if (proc.getExitCode() != null)
-                                 {
-                                    cproc.reap(new VoidServerRequestCallback());
-                                 }
-                                 
-                                 // showOnOutput dialog with no output that is
-                                 // still running -- crate but don't show yet
-                                 else
-                                 {
-                                    createDialog = true;
-                                 }
-                                  
-                                 // take indicated actions
-                                 if (createDialog)
-                                 {
-                                    ConsoleProgressDialog dlg = new ConsoleProgressDialog(
+                                 createDialog = true;
+                                 showDialog = true;
+                              }
+
+                              // showOnOutput dialog that already has 
+                              // output -- make sure the user sees it
+                              //
+                              // NOTE: we have to trim the  buffered output
+                              // for the comparison because when the password
+                              // manager provides a password the back-end
+                              // process sometimes echos a newline back to us
+                              //
+                              else if (proc.getBufferedOutput().trim().length() > 0)
+                              {
+                                 createDialog = true;
+                                 showDialog = true;
+                              }
+
+                              // showOnOutput dialog that has exited
+                              // and has no output -- reap it
+                              else if (proc.getExitCode() != null)
+                              {
+                                 cproc.reap(new VoidServerRequestCallback());
+                              }
+
+                              // showOnOutput dialog with no output that is
+                              // still running -- create but don't show yet
+                              else
+                              {
+                                 createDialog = true;
+                              }
+
+                              // take indicated actions
+                              if (createDialog)
+                              {
+                                 ConsoleProgressDialog dlg = new ConsoleProgressDialog(
                                        proc.getCaption(),
                                        cproc,
                                        proc.getBufferedOutput(),
                                        proc.getExitCode(),
                                        cryptoServer);
-                                    
-                                    if (showDialog)
-                                       dlg.showModal();
-                                    else
-                                       dlg.showOnOutput();
-                                 }
-                              }
-                              else
-                              {
-                                 // TODO (gary) reassociate modeless process(es)
-                                 // to the Terminal tab's selection dropdown
-                                 // dropdown.
-                                 // Until then, just stop and reap the processes
-                                 // so they don't prevent session suspend and 
-                                 // linger as zombies.
-                                 cproc.interrupt(new SimpleRequestCallback<Void>()
-                                 {
-                                    @Override
-                                    public void onResponseReceived(Void response)
-                                    {
-                                       cproc.reap(new VoidServerRequestCallback());
-                                    }
-                                    
-                                 });
+
+                                 if (showDialog)
+                                    dlg.showModal();
+                                 else
+                                    dlg.showOnOutput();
                               }
                            }
 
@@ -170,7 +156,7 @@ public class ConsoleProcess implements ConsoleOutputEvent.HasHandlers,
                }
             }
          });
-         
+
          eventBus_.addHandler(
                ConsoleProcessCreatedEvent.TYPE,
                new ConsoleProcessCreatedEvent.Handler()
@@ -191,7 +177,7 @@ public class ConsoleProcess implements ConsoleOutputEvent.HasHandlers,
                          !satelliteManager.satelliteWindowExists(targetWindow))
                         return true;
                      
-                     // othewise don't handle
+                     // otherwise don't handle
                      else
                         return false;
                   }
@@ -232,31 +218,51 @@ public class ConsoleProcess implements ConsoleOutputEvent.HasHandlers,
                                                                eventBus_,
                                                                procInfo));
       }
-      
-      public ConsoleProgressDialog showConsoleProgressDialog(
-                                                ConsoleProcessInfo procInfo)
+
+      /**
+       * Terminate and reap a process
+       * @param handle process to kill and reap
+       */
+      public void interruptAndReap(final String handle)
       {
-         ConsoleProcess proc = new ConsoleProcess(server_,
-                                                  eventBus_,
-                                                  procInfo);
+         interrupt(handle,
+               new SimpleRequestCallback<Void>()
+               {
+                  @Override
+                  public void onResponseReceived(Void response)
+                  {
+                    reap(handle, new VoidServerRequestCallback());
+                  }
 
-         ConsoleProgressDialog dlg = new ConsoleProgressDialog(
-               procInfo.getCaption(),
-               proc,
-               procInfo.getBufferedOutput(),
-               procInfo.getExitCode(),
-               cryptoServer_);
-
-         if (procInfo.getShowOnOutput())
-            dlg.showOnOutput();
-         else
-            dlg.showModal();
-         
-         return dlg;
+                  @Override
+                  public void onError(ServerError error)
+                  {
+                     Debug.logError(error);
+                  }
+               });
       }
 
+      /**
+       * Interrupt process with given handle.
+       * @param handle process to interrupt
+       * @param requestCallback callback to invoke when done
+       */
+      public void interrupt(final String handle, ServerRequestCallback<Void> requestCallback)
+      {
+         server_.processInterrupt(handle, requestCallback);
+      }
+      
+      /**
+       * Reap process with given handle
+       * @param handle process to reap
+       * @param requestCallback callback to invoke when done
+       */
+      public void reap(final String handle, ServerRequestCallback<Void> requestCallback)
+      {
+         server_.processReap(handle, requestCallback);
+      }
+      
       private final ConsoleServerOperations server_;
-      private final CryptoServerOperations cryptoServer_;
       private final EventBus eventBus_;
    }
 
@@ -275,8 +281,7 @@ public class ConsoleProcess implements ConsoleOutputEvent.HasHandlers,
                                              ServerConsoleOutputEvent event)
                {
                   if (event.getProcessHandle().equals(procInfo.getHandle()))
-                     fireEvent(new ConsoleOutputEvent(event.getOutput(),
-                                                      event.getError()));
+                     fireEvent(new ConsoleOutputEvent(event.getOutput()));
                }
             }));
       registrations_.add(eventBus.addHandler(
@@ -310,11 +315,20 @@ public class ConsoleProcess implements ConsoleOutputEvent.HasHandlers,
       ));
    }
    
+
    public ConsoleProcessInfo getProcessInfo()
    {
       return procInfo_;
    }
-
+   
+   public int getChannelMode()
+   {
+      if (forceRpc_)
+         return ConsoleProcessInfo.CHANNEL_RPC;
+      
+      return procInfo_.getChannelMode(); 
+   }
+   
    public void start(ServerRequestCallback<Void> requestCallback)
    {
       server_.processStart(procInfo_.getHandle(), requestCallback);
@@ -330,7 +344,18 @@ public class ConsoleProcess implements ConsoleOutputEvent.HasHandlers,
    {
       server_.processSetShellSize(procInfo_.getHandle(), cols, rows, requestCallback);
    }
+
+   public void getTerminalBufferChunk(int chunk, ServerRequestCallback<ProcessBufferChunk> requestCallback)
+   {
+      server_.processGetBufferChunk(procInfo_.getHandle(), chunk, requestCallback);
+   }
    
+   public void useRpcMode(ServerRequestCallback<Void> requestCallback)
+   {
+      forceRpc_ = true;
+      server_.processUseRpc(procInfo_.getHandle(), requestCallback);
+   }
+
    public void interrupt(ServerRequestCallback<Void> requestCallback)
    {
       server_.processInterrupt(procInfo_.getHandle(), requestCallback);
@@ -372,4 +397,5 @@ public class ConsoleProcess implements ConsoleOutputEvent.HasHandlers,
    private final HandlerManager handlers_ = new HandlerManager(this);
    private final ConsoleServerOperations server_;
    private final ConsoleProcessInfo procInfo_;
+   private boolean forceRpc_;
 }

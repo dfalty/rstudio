@@ -209,14 +209,18 @@ public:
          return;
       }
 
-      boost::sregex_token_iterator it(contents.begin(), contents.end(), reSeparator, -1);
-      boost::sregex_token_iterator end;
-
-      for (; it != end; ++it)
+      try
       {
-         std::map<std::string, std::string> fields = parseAddinDcf(*it);
-         add(pkgName, fields);
+         boost::sregex_token_iterator it(contents.begin(), contents.end(), reSeparator, -1);
+         boost::sregex_token_iterator end;
+
+         for (; it != end; ++it)
+         {
+            std::map<std::string, std::string> fields = parseAddinDcf(*it);
+            add(pkgName, fields);
+         }
       }
+      CATCH_UNEXPECTED_EXCEPTION;
    }
    
    bool contains(const std::string& package, const std::string& name)
@@ -308,7 +312,7 @@ AddinRegistry& addinRegistry()
    return *s_pCurrentRegistry;
 }
 
-class AddinIndexer : public ppe::Indexer
+class AddinWorker : public ppe::Worker
 {
    void onIndexingStarted()
    {
@@ -320,7 +324,7 @@ class AddinIndexer : public ppe::Indexer
       pRegistry_->add(pkgName, addinPath);
    }
    
-   void onIndexingCompleted()
+   void onIndexingCompleted(json::Object* pPayload)
    {
       // finalize by indexing current package
       if (isDevtoolsLoadAllActive())
@@ -345,14 +349,18 @@ class AddinIndexer : public ppe::Indexer
          response.setResult(registryJson);
          continuation(Success(), &response);
       }
+      
+      // provide registry as json
+      (*pPayload)["addin_registry"] = registryJson;
+
+      // reset
+      continuations_.clear();
+      pRegistry_.reset();
    }
 
 public:
    
-   AddinIndexer(const std::string& resourcePath)
-      : ppe::Indexer(resourcePath)
-   {
-   }
+   AddinWorker() : ppe::Worker("rstudio/addins.dcf") {}
    
    void addContinuation(json::JsonRpcFunctionContinuation continuation)
    {
@@ -364,76 +372,24 @@ private:
    std::vector<json::JsonRpcFunctionContinuation> continuations_;
 };
 
-AddinIndexer& addinIndexer()
+boost::shared_ptr<AddinWorker>& addinWorker()
 {
-   static AddinIndexer instance("rstudio/addins.dcf");
+   static boost::shared_ptr<AddinWorker> instance(new AddinWorker);
    return instance;
 }
 
 void indexLibraryPathsWithContinuation(
-                        json::JsonRpcFunctionContinuation continuation)
+      json::JsonRpcFunctionContinuation continuation)
 {
    if (continuation)
-      addinIndexer().addContinuation(continuation);
-   
-   if (!addinIndexer().running())
-      addinIndexer().start();
-}
-
-void indexLibraryPaths()
-{
-   indexLibraryPathsWithContinuation(json::JsonRpcFunctionContinuation());
-}
-
-void onDeferredInit(bool)
-{
-   // re-index
-   indexLibraryPaths();
-}
-
-// re-index on package library mutating commands (however don't do so
-// if the packages pane is disabled)
-void onConsoleInput(const std::string& input)
-{
-   // check for packages pane disabled
-   if (module_context::disablePackages())
-      return;
-
-   // initialize commands if necessary
-   static std::vector<std::string> commands;
-   if (commands.empty())
-   {
-      commands.push_back("install.packages");
-      commands.push_back("remove.packages");
-      commands.push_back("devtools::install_github");
-      commands.push_back("install_github");
-      commands.push_back("devtools::load_all");
-      commands.push_back("load_all");
-   }
-
-   // check for package library mutating command
-   std::string trimmedInput = boost::algorithm::trim_copy(input);
-   BOOST_FOREACH(const std::string& command, commands)
-   {
-      if (boost::algorithm::starts_with(trimmedInput, command))
-      {
-         // we need to give R a chance to actually process the package library
-         // mutating command before we update the index. schedule delayed work
-         // with idleOnly = true so that it waits until the user has returned
-         // to the R prompt
-         module_context::scheduleDelayedWork(boost::posix_time::seconds(1),
-                                             indexLibraryPaths,
-                                             true); // idle only
-         return;
-      }
-   }
+      addinWorker()->addContinuation(continuation);
 }
 
 void getRAddins(const json::JsonRpcRequest& request,
                 const json::JsonRpcFunctionContinuation& continuation)
 {
    // read params
-   bool reindex;
+   bool reindex = false;
    Error error = json::readParams(request.params, &reindex);
    if (error)
    {
@@ -529,9 +485,9 @@ Error initialize()
    
    // load cached registry
    loadAddinRegistry();
-
-   events().onDeferredInit.connect(onDeferredInit);
-   events().onConsoleInput.connect(onConsoleInput);
+   
+   // register worker
+   ppe::indexer().addWorker(addinWorker());
    
    ExecBlock initBlock;
    initBlock.addFunctions()

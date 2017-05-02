@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.rstudio.core.client.resources.CoreResources;
+import org.rstudio.core.client.resources.ImageResource2x;
 import org.rstudio.core.client.theme.res.ThemeStyles;
 import org.rstudio.studio.client.workbench.views.environment.view.RObjectEntry.Categories;
 
@@ -184,15 +185,15 @@ public class EnvironmentObjectList extends EnvironmentObjectDisplay
                       object.isExpanding ? 
                          CoreResources.INSTANCE.progress() :
                          object.expanded ?
-                            EnvironmentResources.INSTANCE.collapseIcon() :
-                            EnvironmentResources.INSTANCE.expandIcon();
+                            new ImageResource2x(EnvironmentResources.INSTANCE.collapseIcon2x()) :
+                            new ImageResource2x(EnvironmentResources.INSTANCE.expandIcon2x());
 
                   imageUri = expandImage.getSafeUri().asString();
                }
                else if (object.hasTraceInfo())
                {
-                  imageUri = EnvironmentResources.INSTANCE
-                        .tracedFunction().getSafeUri().asString();
+                  imageUri = new ImageResource2x(EnvironmentResources.INSTANCE
+                        .tracedFunction2x()).getSafeUri().asString();
                   imageStyle += (" " + style_.unclickableIcon());
                }
                if (imageUri.length() > 0)
@@ -293,8 +294,12 @@ public class EnvironmentObjectList extends EnvironmentObjectDisplay
       {
          TableCellBuilder nameCol = row.startTD();
          String styleName = style_.nameCol();
-         if (rowValue.getCategory() == Categories.Data &&
-             host_.enableClickableObjects())
+         
+         boolean isClickable =
+               host_.enableClickableObjects() &&
+               rowValue.getCategory() != Categories.Value;
+         
+         if (isClickable)
          {
             styleName += (" " + style_.clickableCol() + " " +
                           ThemeStyles.INSTANCE.handCursor());
@@ -317,6 +322,9 @@ public class EnvironmentObjectList extends EnvironmentObjectDisplay
          // build the column containing the description of the object
          TableCellBuilder descCol = row.startTD();
          String title = rowValue.rObject.getValue();
+         boolean isClickable =
+               host_.enableClickableObjects() &&
+               rowValue.getCategory() != RObjectEntry.Categories.Value;
          if ((!title.equals(RObjectEntry.NO_VALUE)) &&
              title != null)
          {
@@ -331,20 +339,26 @@ public class EnvironmentObjectList extends EnvironmentObjectDisplay
          {
             descriptionStyle += (" " + style_.unevaluatedPromise());
          }
-         else if ((rowValue.getCategory() == RObjectEntry.Categories.Data ||
-                   rowValue.getCategory() == RObjectEntry.Categories.Function)
-                   &&
-                host_.enableClickableObjects())
+         else if (isClickable)
          {
             descriptionStyle += (" " +
                                  style_.decoratedValueCol() + " " +
                                  style_.clickableCol() + " " + 
                                  ThemeStyles.INSTANCE.handCursor());
          }
+         
          if (rowValue.getCategory() == RObjectEntry.Categories.Data)
          {
-            descriptionStyle += (" " + 
-                                ThemeStyles.INSTANCE.environmentDataFrameCol());
+            if (rowValue.isHierarchical())
+            {
+               descriptionStyle += (" " + 
+                     ThemeStyles.INSTANCE.environmentHierarchicalCol());
+            }
+            else
+            {
+               descriptionStyle += (" " + 
+                     ThemeStyles.INSTANCE.environmentDataFrameCol());
+            }
          }
          else if (rowValue.getCategory() == RObjectEntry.Categories.Function)
          {
@@ -391,7 +405,7 @@ public class EnvironmentObjectList extends EnvironmentObjectDisplay
                     style_.categoryHeaderRow());
             TableCellBuilder objectHeader = leaderRow.startTD();
             objectHeader.colSpan(3)
-                    .className(style_.categoryHeaderText())
+                    .className(style_.categoryHeaderText() + " rstudio-themes-background")
                     .text(categoryTitle)
                     .endTD();
             leaderRow.endTR();

@@ -1,7 +1,7 @@
 /*
  * ShellInteractionManager.java
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -21,7 +21,6 @@ import org.rstudio.core.client.StringUtil;
 import org.rstudio.core.client.command.KeyboardShortcut;
 import org.rstudio.studio.client.application.Desktop;
 import org.rstudio.studio.client.common.CommandLineHistory;
-import org.rstudio.studio.client.common.crypto.CryptoServerOperations;
 import org.rstudio.studio.client.common.debugging.model.UnhandledError;
 import org.rstudio.studio.client.workbench.views.console.shell.editor.InputEditorDisplay;
 
@@ -33,11 +32,9 @@ import com.google.gwt.event.dom.client.KeyDownHandler;
 public class ShellInteractionManager implements ShellOutputWriter
 {
    public ShellInteractionManager(ShellDisplay display,
-                                  CryptoServerOperations server,
                                   CommandWithArg<ShellInput> inputHandler)
    {
       display_ = display;
-      secureInput_ = new ShellSecureInput(server); 
       input_ = display_.getInputEditorDisplay();
       historyManager_ = new CommandLineHistory(input_);
       inputHandler_ = inputHandler;
@@ -124,22 +121,7 @@ public class ShellInteractionManager implements ShellOutputWriter
             outputPrefixToSuppress_ = commandEntry;
       }
 
-      // encrypt the input and return it
-      secureInput_.secureString(input, 
-         new CommandWithArg<String>() {
-            @Override
-            public void execute(String arg) // success
-            {
-               onInputReady.execute(ShellInput.create(arg, echoInput));
-            }
-         },
-         new CommandWithArg<String>() {
-            @Override
-            public void execute(String errorMessage) // failure
-            {
-               consoleWriteError(errorMessage);
-            }
-         });
+      onInputReady.execute(ShellInput.create(input, echoInput));
    }
  
    private void navigateHistory(int offset)
@@ -221,8 +203,9 @@ public class ShellInteractionManager implements ShellOutputWriter
          int keyCode = event.getNativeKeyCode();
          int modifiers = KeyboardShortcut.getModifierValue(
                                                 event.getNativeEvent());
-         
-         if (historyEnabled_ && event.isUpArrow() && modifiers == 0)
+         if (historyEnabled_ && 
+               ((event.isUpArrow() && modifiers == 0) ||
+                (keyCode == 'P'    && modifiers == KeyboardShortcut.CTRL)))
          {
             InputEditorDisplay input = display_.getInputEditorDisplay();
             if (input.getCurrentLineNum() == 0)
@@ -233,7 +216,9 @@ public class ShellInteractionManager implements ShellOutputWriter
                navigateHistory(-1);
             }
          }
-         else if (historyEnabled_ && event.isDownArrow() && modifiers == 0)
+         else if (historyEnabled_ && 
+               ((event.isDownArrow() && modifiers == 0) ||
+                (keyCode == 'N'      && modifiers == KeyboardShortcut.CTRL)))
          {
             InputEditorDisplay input = display_.getInputEditorDisplay();
             if (input.getCurrentLineNum() == input.getCurrentLineCount() - 1)
@@ -284,7 +269,6 @@ public class ShellInteractionManager implements ShellOutputWriter
    private final CommandLineHistory historyManager_;
    
    private final CommandWithArg<ShellInput> inputHandler_;
-   private final ShellSecureInput secureInput_;
    
    /* Hack to fix echoing problems on Windows.
     * For echoed input like username, Windows always echoes input back to the

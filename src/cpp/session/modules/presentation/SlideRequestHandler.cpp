@@ -146,7 +146,7 @@ std::string alternateMathjax(const std::string& prefix)
 {
    return boost::algorithm::replace_first_copy(
         remoteMathjax(),
-        "https://cdn.mathjax.org/mathjax/latest",
+        "https://mathjax.rstudio.com/latest",
         prefix);
 }
 
@@ -1264,6 +1264,6 @@ bool savePresentationAsRpubsSource(const core::FilePath& filePath,
 
 } // namespace presentation
 } // namespace modules
-} // namesapce session
+} // namespace session
 } // namespace rstudio
 

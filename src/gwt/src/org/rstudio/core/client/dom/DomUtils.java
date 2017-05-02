@@ -75,6 +75,13 @@ public class DomUtils
          element.focus();
    }-*/;
 
+   /**
+    * Trim excess lines from the beginning of the text of an element.
+    * 
+    * @param element The element to trim lines from.
+    * @param linesToTrim The number of lines to trim.
+    * @return Number of lines trimmed
+    */
    public static int trimLines(Element element, int linesToTrim)
    {
       return trimLines(element.getChildNodes(), linesToTrim);
@@ -229,7 +236,7 @@ public class DomUtils
             return 0;
       }
    }
-
+   
    private static int countLinesInternal(Text textNode, boolean pre)
    {
       if (!pre)
@@ -879,9 +886,16 @@ public class DomUtils
    }
    
    public static Element findParentElement(Element el,
+                                           ElementPredicate predicate)
+   {
+      return findParentElement(el, false, predicate);
+   }
+   
+   public static Element findParentElement(Element el,
+                                           boolean includeSelf,
    	                                     ElementPredicate predicate)
    {
-      Element parent = el.getParentElement();
+      Element parent = includeSelf ? el : el.getParentElement();
       while (parent != null)
       {
          if (predicate.test(parent))

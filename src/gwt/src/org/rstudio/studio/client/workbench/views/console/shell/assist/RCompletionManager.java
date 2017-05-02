@@ -54,10 +54,14 @@ import org.rstudio.studio.client.common.filetypes.FileTypeRegistry;
 import org.rstudio.studio.client.server.ServerError;
 import org.rstudio.studio.client.server.ServerRequestCallback;
 import org.rstudio.studio.client.server.Void;
-import org.rstudio.studio.client.workbench.codesearch.model.FunctionDefinition;
+import org.rstudio.studio.client.workbench.codesearch.model.DataDefinition;
+import org.rstudio.studio.client.workbench.codesearch.model.FileFunctionDefinition;
+import org.rstudio.studio.client.workbench.codesearch.model.ObjectDefinition;
+import org.rstudio.studio.client.workbench.codesearch.model.SearchPathFunctionDefinition;
 import org.rstudio.studio.client.workbench.prefs.model.UIPrefs;
 import org.rstudio.studio.client.workbench.prefs.model.UIPrefsAccessor;
 import org.rstudio.studio.client.workbench.snippets.SnippetHelper;
+import org.rstudio.studio.client.workbench.views.console.events.SendToConsoleEvent;
 import org.rstudio.studio.client.workbench.views.console.shell.assist.CompletionRequester.CompletionResult;
 import org.rstudio.studio.client.workbench.views.console.shell.assist.CompletionRequester.QualifiedName;
 import org.rstudio.studio.client.workbench.views.console.shell.editor.InputEditorDisplay;
@@ -77,6 +81,7 @@ import org.rstudio.studio.client.workbench.views.source.editors.text.ace.RInfixD
 import org.rstudio.studio.client.workbench.views.source.editors.text.ace.Range;
 import org.rstudio.studio.client.workbench.views.source.editors.text.ace.Token;
 import org.rstudio.studio.client.workbench.views.source.editors.text.ace.TokenCursor;
+import org.rstudio.studio.client.workbench.views.source.editors.text.ace.TokenIterator;
 import org.rstudio.studio.client.workbench.views.source.editors.text.events.PasteEvent;
 import org.rstudio.studio.client.workbench.views.source.editors.text.r.RCompletionToolTip;
 import org.rstudio.studio.client.workbench.views.source.editors.text.r.SignatureToolTipManager;
@@ -141,7 +146,7 @@ public class RCompletionManager implements CompletionManager
       sigTipManager_ = new SignatureToolTipManager(docDisplay_);
       suggestTimer_ = new SuggestionTimer(this, uiPrefs_);
       snippets_ = new SnippetHelper((AceEditor) docDisplay, getSourceDocumentPath());
-      requester_ = new CompletionRequester(rnwContext, navigableSourceEditor, snippets_);
+      requester_ = new CompletionRequester(rnwContext, docDisplay, snippets_);
       handlers_ = new HandlerRegistrations();
       
       handlers_.add(input_.addBlurHandler(new BlurHandler() {
@@ -354,18 +359,18 @@ public class RCompletionManager implements CompletionManager
       final GlobalProgressDelayer progress = new GlobalProgressDelayer(
             globalDisplay_, 1000, "Searching for function definition...");
       
-      server_.getFunctionDefinition(
+      server_.getObjectDefinition(
          lineWithPos.getLine(),
          lineWithPos.getPosition(), 
-         new ServerRequestCallback<FunctionDefinition>() {
+         new ServerRequestCallback<ObjectDefinition>() {
             @Override
-            public void onResponseReceived(FunctionDefinition def)
+            public void onResponseReceived(ObjectDefinition def)
             {
                 // dismiss progress
                 progress.dismiss();
                     
                 // if we got a hit
-                if (def.getFunctionName() != null)
+                if (def.getObjectName() != null)
                 {   
                    // search locally if a function navigator was provided
                    if (navigableSourceEditor_ != null)
@@ -373,7 +378,7 @@ public class RCompletionManager implements CompletionManager
                       // try to search for the function locally
                       SourcePosition position = 
                          navigableSourceEditor_.findFunctionPositionFromCursor(
-                                                         def.getFunctionName());
+                                                         def.getObjectName());
                       if (position != null)
                       {
                          navigableSourceEditor_.navigateToPosition(position, 
@@ -386,21 +391,33 @@ public class RCompletionManager implements CompletionManager
                    // if we didn't satisfy the request using a function
                    // navigator and we got a file back from the server then
                    // navigate to the file/loc
-                   if (def.getFile() != null)
+                   if (def.getObjectType() == 
+                         FileFunctionDefinition.OBJECT_TYPE)
                    {  
-                      fileTypeRegistry_.editFile(def.getFile(), 
-                                                 def.getPosition());
+                      FileFunctionDefinition fileDef = 
+                            def.getObjectData().cast();
+                      fileTypeRegistry_.editFile(fileDef.getFile(), 
+                                                 fileDef.getPosition());
                    }
                    
                    // if we didn't get a file back see if we got a 
                    // search path definition
-                   else if (def.getSearchPathFunctionDefinition() != null)
+                   else if (def.getObjectType() ==
+                              SearchPathFunctionDefinition.OBJECT_TYPE)
                    {
-                      eventBus_.fireEvent(new CodeBrowserNavigationEvent(
-                                     def.getSearchPathFunctionDefinition()));
-                      
+                      SearchPathFunctionDefinition searchDef = 
+                            def.getObjectData().cast();
+                      eventBus_.fireEvent(
+                            new CodeBrowserNavigationEvent(searchDef));
                    }
-               }
+                   
+                   // finally, check to see if it's a data frame
+                   else if (def.getObjectType() == DataDefinition.OBJECT_TYPE)
+                   {
+                      eventBus_.fireEvent(new SendToConsoleEvent(
+                            "View(" + def.getObjectName() + ")", true, false));
+                   }
+                }
             }
 
             @Override
@@ -420,6 +437,9 @@ public class RCompletionManager implements CompletionManager
       
       if (sigTipManager_.previewKeyDown(event))
          return true;
+      
+      if (isDisabled())
+         return false;
       
       /**
        * KEYS THAT MATTER
@@ -492,22 +512,11 @@ public class RCompletionManager implements CompletionManager
       }
       else
       {
-         switch (keycode)
-         {
-         // chrome on ubuntu now sends this before every keydown
-         // so we need to explicitly ignore it. see:
-         // https://github.com/ivaynberg/select2/issues/2482
-         case KeyCodes.KEY_WIN_IME: 
-            return false ;
-            
-         case KeyCodes.KEY_SHIFT:
-         case KeyCodes.KEY_CTRL:
-         case KeyCodes.KEY_ALT:
-         case KeyCodes.KEY_MAC_FF_META:
-         case KeyCodes.KEY_WIN_KEY_LEFT_META:
-            return false ; // bare modifiers should do nothing
-         }
+         // bail on modifier keys
+         if (KeyboardHelper.isModifierKey(keycode))
+            return false;
          
+         // allow emacs-style navigation of popup entries
          if (modifier == KeyboardShortcut.CTRL)
          {
             switch (keycode)
@@ -703,6 +712,9 @@ public class RCompletionManager implements CompletionManager
    public boolean previewKeyPress(char c)
    {
       suggestTimer_.cancel();
+      
+      if (isDisabled())
+         return false;
       
       if (popup_.isShowing())
       {
@@ -1229,6 +1241,9 @@ public class RCompletionManager implements CompletionManager
       String filePath = getSourceDocumentPath();
       String docId = getSourceDocumentId();
       
+      // Provide 'line' for R custom completers
+      String line = docDisplay_.getCurrentLineUpToCursor();
+      
       requester_.getCompletions(
             context.getToken(),
             context.getAssocData(),
@@ -1241,6 +1256,7 @@ public class RCompletionManager implements CompletionManager
             infixData.getExcludeArgsFromObject(),
             filePath,
             docId,
+            line,
             implicit,
             context_);
 
@@ -2159,6 +2175,20 @@ public class RCompletionManager implements CompletionManager
       if (currentToken == null)
          return "";
       
+      // If the user has inserted some spaces, the cursor might now lie
+      // on a 'text' token. In that case, find the previous token and
+      // use that for completion.
+      String suffix = "";
+      if (currentToken.getValue().trim().isEmpty())
+      {
+         suffix = currentToken.getValue();
+         TokenIterator it = editor.createTokenIterator();
+         it.moveToPosition(cursorPos);
+         Token token = it.stepBackward();
+         if (token != null)
+            currentToken = token;
+      }
+      
       // Exclude non-string and non-identifier tokens.
       if (currentToken.hasType("operator", "comment", "numeric", "text", "punctuation"))
          return "";
@@ -2167,7 +2197,17 @@ public class RCompletionManager implements CompletionManager
       
       String subsetted = tokenValue.substring(0, cursorPos.getColumn() - currentToken.getColumn());
       
-      return subsetted;
+      return subsetted + suffix;
+   }
+   
+   private boolean isDisabled()
+   {
+      // Disable the completion manager while a snippet tabstop
+      // manager is active
+      if (docDisplay_.isSnippetsTabStopManagerActive())
+         return true;
+      
+      return false;
    }
    
    private GlobalDisplay globalDisplay_;

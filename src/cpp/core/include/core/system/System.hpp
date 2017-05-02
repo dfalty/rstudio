@@ -1,7 +1,7 @@
 /*
  * System.hpp
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -36,6 +36,7 @@ typedef pid_t PidType;
 
 #include <core/Log.hpp>
 #include <core/Error.hpp>
+#include <core/FilePath.hpp>
 
 #include <core/system/Types.hpp>
 
@@ -43,7 +44,6 @@ namespace rstudio {
 namespace core {
 
 class FileInfo;
-class FilePath;
 
 namespace system {
 
@@ -57,6 +57,7 @@ enum LogLevel
 
 // portable realPath
 Error realPath(const FilePath& filePath, FilePath* pRealPath);
+Error realPath(const std::string& path, FilePath* pRealPath);
 bool realPathsEqual(const FilePath& a, const FilePath& b);
 
 void addToSystemPath(const FilePath& path, bool prepend = false);
@@ -67,7 +68,6 @@ Error closeNonStdFileDescriptors();
 void closeStdFileDescriptors();
 void attachStdFileDescriptorsToDevNull();
 void setStandardStreamsToDevNull();
-Error realPath(const std::string& path, FilePath* pRealPath);
 
 // Handles EINTR retrying. Only for use with functions that return -1 on
 // error and set errno.
@@ -128,11 +128,20 @@ void safePosixCall(const boost::function<T()>& func,
 #endif
 
 #ifdef _WIN32
+
+// Is 64-bit Windows?
 bool isWin64();
+
+// Is calling process 64-bit?
+bool isCurrentProcessWin64();
+
 bool isVistaOrLater();
+bool isWin7OrLater();
 Error makeFileHidden(const FilePath& path);
 Error copyMetafileToClipboard(const FilePath& path);
 void ensureLongPath(FilePath* pFilePath);
+Error expandEnvironmentVariables(std::string value, std::string* pResult);
+FilePath expandComSpec();
 
 // close a handle then set it to NULL (so we can call this function
 // repeatedly without failure or other side effects)
@@ -147,7 +156,7 @@ public:
    }
 
    virtual ~CloseHandleOnExitScope();
-
+   void detach() { pHandle_ = NULL; }
 private:
    HANDLE* pHandle_;
    ErrorLocation location_;
@@ -267,6 +276,9 @@ void fixupExecutablePath(FilePath* pExePath);
 void abort();
 
 Error terminateProcess(PidType pid);
+
+// Returns true if pid has one or more subprocesses
+bool hasSubprocesses(PidType pid);
    
 } // namespace system
 } // namespace core 

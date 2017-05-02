@@ -125,7 +125,8 @@ public interface ThemeStyles extends CssResource
    String dialogMessage();
    String sessionAbendMessage();
    String applicationHeaderStrong();
-          
+   
+   String environmentHierarchicalCol();
    String environmentDataFrameCol();
    String environmentFunctionCol();
 
@@ -175,4 +176,15 @@ public interface ThemeStyles extends CssResource
    String toolbarInfoLabel();
    
    String displayNone();
+   String logoAnchor();
+
+   String windowFrameObject();
+   String minimizedWindowObject();
+   String windowFrameWidget();
+
+   String consoleOnlyWindowFrame();
+   String consoleWidgetLayout();
+   String consoleHeaderLayout();
+   String consoleMinimizeLayout();
+   String consoleMaximizeLayout();
 }

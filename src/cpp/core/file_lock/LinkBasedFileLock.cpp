@@ -32,19 +32,20 @@
 #include <core/Log.hpp>
 #include <core/FilePath.hpp>
 #include <core/FileSerializer.hpp>
+#include <core/system/Process.hpp>
 #include <core/system/System.hpp>
 
 #include <boost/foreach.hpp>
 #include <boost/system/error_code.hpp>
 
-#define DEBUG(__X__)                                                           \
+#define LOG(__X__)                                                             \
    do                                                                          \
    {                                                                           \
       if (::rstudio::core::FileLock::isLoggingEnabled())                       \
       {                                                                        \
          std::stringstream ss;                                                 \
-         ss << "(PID " << ::getpid() << "): " << __X__;                        \
-         LOG_DEBUG_MESSAGE(ss.str());                                          \
+         ss << "(PID " << ::getpid() << "): " << __X__ << std::endl;           \
+         ::rstudio::core::FileLock::log(ss.str());                             \
       }                                                                        \
    } while (0)
 
@@ -93,10 +94,67 @@ bool isLockFileStale(const FilePath& lockFilePath)
    return LinkBasedFileLock::isLockFileStale(lockFilePath);
 }
 
+bool isLockFileOrphaned(const FilePath& lockFilePath)
+{
+#ifndef _WIN32
+   
+   Error error;
+   
+   // attempt to read pid from lockfile
+   std::string pid;
+   error = core::readStringFromFile(lockFilePath, &pid);
+   if (error)
+   {
+      LOG_ERROR(error);
+      return false;
+   }
+   pid = string_utils::trimWhitespace(pid);
+   
+#ifdef __linux__
+   
+   // on linux, we can check the proc filesystem for an associated
+   // process -- if there is no such directory, then we assume that
+   // this lockfile has been orphaned
+   FilePath procPath("/proc/" + pid);
+   if (!procPath.exists())
+      return true;
+   
+#endif
+   
+   // call 'ps' to attempt to see if a process associated
+   // with this process id exists (and get information about it)
+   using namespace core::system;
+   std::string command = "ps -p " + pid;
+   ProcessOptions options;
+   ProcessResult result;
+   error = core::system::runCommand(command, options, &result);
+   if (error)
+   {
+      LOG_ERROR(error);
+      return false;
+   }
+   
+   // ps will return a non-zero exit status if no process with
+   // the requested id is available -- if there is no process,
+   // then this lockfile has been orphaned
+   if (result.exitStatus != EXIT_SUCCESS)
+      return true;
+   
+#endif /* _WIN32 */
+   
+   // assume the process is not orphaned if all previous checks failed
+   return false;
+   
+}
+
 } // end anonymous namespace
 
 bool LinkBasedFileLock::isLockFileStale(const FilePath& lockFilePath)
 {
+   // check for orphaned lockfile
+   if (isLockFileOrphaned(lockFilePath))
+      return true;
+   
    double seconds = s_timeoutInterval.total_seconds();
    double diff = ::difftime(::time(NULL), lockFilePath.lastWriteTime());
    return diff >= seconds;
@@ -151,7 +209,7 @@ public:
       {
          BOOST_FOREACH(const FilePath& lockFilePath, registration_)
          {
-            DEBUG("Bumping write time: " << lockFilePath.absolutePath());
+            LOG("Bumping write time: " << lockFilePath.absolutePath());
             lockFilePath.setLastWriteTime();
          }
       }
@@ -167,7 +225,7 @@ public:
             Error error = lockFilePath.removeIfExists();
             if (error)
                LOG_ERROR(error);
-            DEBUG("Clearing lock: " << lockFilePath.absolutePath());
+            LOG("Clearing lock: " << lockFilePath.absolutePath());
          }
          registration_.clear();
       }
@@ -203,7 +261,7 @@ Error writeLockFile(const FilePath& lockFilePath)
    
    // ensure the proxy file is created, and remove it when we're done
    RemoveOnExitScope scope(proxyPath, ERROR_LOCATION);
-   error = proxyPath.ensureFile();
+   error = core::writeStringToFile(proxyPath, pidString());
    if (error)
    {
       // log the error since it isn't expected and could get swallowed
@@ -219,17 +277,35 @@ Error writeLockFile(const FilePath& lockFilePath)
             proxyPath.absolutePathNative().c_str(),
             lockFilePath.absolutePathNative().c_str());
    
-   // Log errors (remove this if it is too noisy on NFS)
+   // log errors (remove this if it is too noisy on NFS)
    if (status == -1)
-      LOG_ERROR(systemError(errno, ERROR_LOCATION));
+   {
+      int errorNumber = errno;
+      
+      // verbose logging
+      LOG("ERROR: ::link() failed (errno " << errorNumber << ")" << std::endl <<
+          "Attempted to link:" << std::endl << " - " <<
+          "'" << proxyPath.absolutePathNative() << "'" <<
+          " => " <<
+          "'" << lockFilePath.absolutePathNative() << "'");
+      
+      LOG_ERROR(systemError(errorNumber, ERROR_LOCATION));
+   }
 
    struct stat info;
    int errc = ::stat(proxyPath.absolutePathNative().c_str(), &info);
    if (errc)
    {
+      int errorNumber = errno;
+      
+      // verbose logging
+      LOG("ERROR: ::stat() failed (errno " << errorNumber << ")" << std::endl <<
+          "Attempted to stat:" << std::endl << " - " <<
+          "'" << proxyPath.absolutePathNative() << "'");
+      
       // log the error since it isn't expected and could get swallowed
       // upstream by a caller ignoring lock_not_available errors
-      Error error = systemError(errno, ERROR_LOCATION);
+      Error error = systemError(errorNumber, ERROR_LOCATION);
       LOG_ERROR(error);
       return error;
    }
@@ -237,7 +313,10 @@ Error writeLockFile(const FilePath& lockFilePath)
    // assume that a failure here is the result of someone else
    // acquiring the lock before we could
    if (info.st_nlink != 2)
+   {
+      LOG("WARNING: Failed to acquire lock (info.st_nlink == " << info.st_nlink << ")");
       return fileExistsError(ERROR_LOCATION);
+   }
    
    return Success();
    
@@ -288,7 +367,7 @@ Error LinkBasedFileLock::acquire(const FilePath& lockFilePath)
       {
          // note that multiple processes may attempt to remove this
          // file at the same time, so errors shouldn't be fatal
-         DEBUG("Removing stale lockfile: " << lockFilePath.absolutePath());
+         LOG("Removing stale lockfile: " << lockFilePath.absolutePath());
          Error error = lockFilePath.remove();
          if (error)
             LOG_ERROR(error);
@@ -297,7 +376,7 @@ Error LinkBasedFileLock::acquire(const FilePath& lockFilePath)
       // ... it's not stale -- someone else has the lock, cannot proceed
       else
       {
-         DEBUG("No lock available: " << lockFilePath.absolutePath());
+         LOG("No lock available: " << lockFilePath.absolutePath());
          return systemError(boost::system::errc::no_lock_available,
                             ERROR_LOCATION);
       }
@@ -313,7 +392,7 @@ Error LinkBasedFileLock::acquire(const FilePath& lockFilePath)
    error = writeLockFile(lockFilePath);
    if (error)
    {
-      DEBUG("Failed to acquire lock (lost race?): " << lockFilePath.absolutePath());
+      LOG("Failed to acquire lock: " << lockFilePath.absolutePath());
       return systemError(boost::system::errc::no_lock_available,
                          error,
                          ERROR_LOCATION);
@@ -325,14 +404,14 @@ Error LinkBasedFileLock::acquire(const FilePath& lockFilePath)
    // register our lock (for refresh)
    pImpl_->lockFilePath = lockFilePath;
    lockRegistration().registerLock(lockFilePath);
-   DEBUG("Acquired lock: " << lockFilePath.absolutePath());
+   LOG("Acquired lock: " << lockFilePath.absolutePath());
    return Success();
 }
 
 Error LinkBasedFileLock::release()
 {
    const FilePath& lockFilePath = pImpl_->lockFilePath;
-   DEBUG("Released lock: " << lockFilePath.absolutePath());
+   LOG("Released lock: " << lockFilePath.absolutePath());
    
    Error error = lockFilePath.remove();
    if (error)

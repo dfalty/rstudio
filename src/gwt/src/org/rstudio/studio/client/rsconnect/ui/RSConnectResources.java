@@ -23,57 +23,57 @@ public interface RSConnectResources extends ClientBundle
    static RSConnectResources INSTANCE = 
                   (RSConnectResources)GWT.create(RSConnectResources.class);
    
-   @Source("localAccountIconSmall.png")
-   ImageResource localAccountIconSmall();
+   @Source("localAccountIconSmall_2x.png")
+   ImageResource localAccountIconSmall2x();
 
-   @Source("localAccountIcon.png")
-   ImageResource localAccountIcon();
+   @Source("localAccountIcon_2x.png")
+   ImageResource localAccountIcon2x();
 
-   @Source("localAccountIconLarge.png")
-   ImageResource localAccountIconLarge();
+   @Source("localAccountIconLarge_2x.png")
+   ImageResource localAccountIconLarge2x();
 
-   @Source("cloudAccountIconSmall.png")
-   ImageResource cloudAccountIconSmall();
+   @Source("cloudAccountIconSmall_2x.png")
+   ImageResource cloudAccountIconSmall2x();
 
-   @Source("cloudAccountIcon.png")
-   ImageResource cloudAccountIcon();
+   @Source("cloudAccountIcon_2x.png")
+   ImageResource cloudAccountIcon2x();
 
-   @Source("cloudAccountIconLarge.png")
-   ImageResource cloudAccountIconLarge();
+   @Source("cloudAccountIconLarge_2x.png")
+   ImageResource cloudAccountIconLarge2x();
    
-   @Source("publishIcon.png")
-   ImageResource publishIcon();
+   @Source("publishIcon_2x.png")
+   ImageResource publishIcon2x();
 
-   @Source("publishIconLarge.png")
-   ImageResource publishIconLarge();
+   @Source("publishIconLarge_2x.png")
+   ImageResource publishIconLarge2x();
 
-   @Source("rpubsPublish.png")
-   ImageResource rpubsPublish();
+   @Source("rpubsPublish_2x.png")
+   ImageResource rpubsPublish2x();
 
-   @Source("rpubsPublishLarge.png")
-   ImageResource rpubsPublishLarge();
+   @Source("rpubsPublishLarge_2x.png")
+   ImageResource rpubsPublishLarge2x();
    
-   @Source("publishSingleRmd.png")
-   ImageResource publishSingleRmd();
+   @Source("publishSingleRmd_2x.png")
+   ImageResource publishSingleRmd2x();
 
-   @Source("publishMultipleRmd.png")
-   ImageResource publishMultipleRmd();
+   @Source("publishMultipleRmd_2x.png")
+   ImageResource publishMultipleRmd2x();
    
-   @Source("publishDocWithSource.png")
-   ImageResource publishDocWithSource();
+   @Source("publishDocWithSource_2x.png")
+   ImageResource publishDocWithSource2x();
    
-   @Source("publishDocWithoutSource.png")
-   ImageResource publishDocWithoutSource();
+   @Source("publishDocWithoutSource_2x.png")
+   ImageResource publishDocWithoutSource2x();
    
-   @Source("previewDoc.png")
-   ImageResource previewDoc();
+   @Source("previewDoc_2x.png")
+   ImageResource previewDoc2x();
    
-   @Source("previewPlot.png")
-   ImageResource previewPlot();
+   @Source("previewPlot_2x.png")
+   ImageResource previewPlot2x();
    
-   @Source("republishPlot.png")
-   ImageResource republishPlot();
+   @Source("republishPlot_2x.png")
+   ImageResource republishPlot2x();
    
-   @Source("previewPresentation.png")
-   ImageResource previewPresentation();
+   @Source("previewPresentation_2x.png")
+   ImageResource previewPresentation2x();
 }

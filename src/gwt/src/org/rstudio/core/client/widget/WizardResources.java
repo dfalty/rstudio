@@ -29,12 +29,17 @@ public interface WizardResources extends ClientBundle
       String mainWidget();
       String headerLabel();
       String headerPanel();
+      String helpLink();
       String subcaptionLabel();
       String wizardBodyPanel();
       String wizardPageSelector();
       String wizardPageSelectorItem();
       String wizardPageSelectorItemFirst();
+      String wizardPageSelectorItemLabel();
       String wizardPageSelectorItemLast();
+      String wizardPageSelectorItemLeftIcon();
+      String wizardPageSelectorItemRightArrow();
+      String wizardPageSelectorItemSize();
       String wizardPageBackground();
       String wizardBackButton();
    }
@@ -42,9 +47,11 @@ public interface WizardResources extends ClientBundle
    @Source("Wizard.css")
    Styles styles(); 
    
-   ImageResource wizardBackButton();
-   ImageResource wizardDisclosureArrow();
-   
+   @Source("wizardBackButton_2x.png")
+   ImageResource wizardBackButton2x();
+
+   @Source("wizardDisclosureArrow_2x.png")
+   ImageResource wizardDisclosureArrow2x();
    
    @ImageOptions(repeatStyle = RepeatStyle.Horizontal)
    ImageResource wizardPageSelectorBackground();

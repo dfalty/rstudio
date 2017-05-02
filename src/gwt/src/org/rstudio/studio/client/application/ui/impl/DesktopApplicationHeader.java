@@ -35,6 +35,7 @@ import org.rstudio.studio.client.application.model.ApplicationServerOperations;
 import org.rstudio.studio.client.application.model.UpdateCheckResult;
 import org.rstudio.studio.client.application.ui.ApplicationHeader;
 import org.rstudio.studio.client.application.ui.GlobalToolbar;
+import org.rstudio.studio.client.application.ui.RStudioThemes;
 import org.rstudio.studio.client.common.GlobalDisplay;
 import org.rstudio.studio.client.common.debugging.ErrorManager;
 import org.rstudio.studio.client.events.EditEvent;
@@ -116,6 +117,7 @@ public class DesktopApplicationHeader implements ApplicationHeader
          {
             final SessionInfo sessionInfo = session.getSessionInfo();
             
+            isFlatTheme_ = RStudioThemes.isFlat(pUIPrefs_.get()); 
             toolbar_.completeInitialization(sessionInfo);
             
             new JSObjectStateValue(
@@ -267,7 +269,7 @@ public class DesktopApplicationHeader implements ApplicationHeader
    public int getPreferredHeight()
    {
       if (toolbar_.isVisible())
-         return 32;
+         return isFlatTheme_ ? 29 : 32;
       else
          return 5;
    }
@@ -410,4 +412,5 @@ public class DesktopApplicationHeader implements ApplicationHeader
    private IgnoredUpdates ignoredUpdates_;
    private boolean ignoredUpdatesDirty_ = false;
    private ApplicationQuit appQuit_; 
+   private Boolean isFlatTheme_ = false;
 }

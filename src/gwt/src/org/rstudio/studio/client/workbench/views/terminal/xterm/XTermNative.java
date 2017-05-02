@@ -33,7 +33,6 @@ public class XTermNative extends JavaScriptObject
    /**
     * Remove event handlers and detach from parent node.
     */
-   // TODO: (gary) should be calling this
    public final native void destroy() /*-{
       this.destroy();
    }-*/;
@@ -93,6 +92,43 @@ public class XTermNative extends JavaScriptObject
       this.scrollToBottom();
    }-*/;
 
+   public final native void reset() /*-{
+      this.reset();
+   }-*/;
+
+   public final native void clear() /*-{
+      this.clear();
+   }-*/;
+
+   public final native void addClass(String classStr) /*-{
+      this.element.classList.add(classStr);
+   }-*/;
+   
+   public final native int cursorX() /*-{
+      return this.x;
+   }-*/;
+   
+   public final native int cursorY() /*-{
+      return this.y;
+   }-*/;
+ 
+   public final native boolean altBufferActive() /*-{
+      return this.normal != null;
+   }-*/;
+   
+   public final native String currentLine() /*-{
+      lineBuf = this.lines.get(this.y + this.ybase);
+      if (!lineBuf) // resize may be in progress
+         return null;
+      current = "";
+      for (i = 0; i < this.cols; i++) {
+         if (!lineBuf[i])
+            return null;
+         current += lineBuf[i][1];
+      }
+      return current;
+   }-*/;
+   
    /**
     * Install a handler for user input (typing). Only one handler at a 
     * time may be installed. Previous handler will be overwritten.
@@ -104,7 +140,18 @@ public class XTermNative extends JavaScriptObject
             command.@org.rstudio.core.client.CommandWithArg::execute(Ljava/lang/Object;)(data);
          });
    }-*/;
-   
+
+   /**
+    * Install a handler for title events (via escape sequence).
+    * @param command handler for title text
+    */
+   public final native void onTitleData(CommandWithArg<String> command) /*-{
+      this.handleTitle = 
+         $entry(function(title) {
+            command.@org.rstudio.core.client.CommandWithArg::execute(Ljava/lang/Object;)(title);
+         });
+   }-*/;
+
    /**
     * Factory to create a native Javascript terminal object.
     *  

@@ -31,6 +31,7 @@ import org.rstudio.studio.client.workbench.views.connections.model.ConnectionId;
 import org.rstudio.studio.client.workbench.views.environment.model.EnvironmentContextData;
 import org.rstudio.studio.client.workbench.views.output.find.model.FindInFilesState;
 import org.rstudio.studio.client.workbench.views.output.markers.model.MarkersState;
+import org.rstudio.studio.client.workbench.views.packages.model.PackageProvidedExtensions;
 import org.rstudio.studio.client.workbench.views.presentation.model.PresentationState;
 import org.rstudio.studio.client.workbench.views.source.model.SourceDocument;
 
@@ -349,9 +350,17 @@ public class SessionInfo extends JavaScriptObject
    public final native boolean getAllowShell() /*-{
       return this.allow_shell;
    }-*/;
+
+   public final native boolean getAllowTerminalWebsockets() /*-{
+      return this.allow_terminal_websockets;
+   }-*/;
    
    public final native boolean getAllowFileDownloads() /*-{
       return this.allow_file_download;
+   }-*/;
+   
+   public final native boolean getAllowFileUploads() /*-{
+      return this.allow_file_upload;
    }-*/;
    
    public final native boolean getAllowRemovePublicFolder() /*-{
@@ -480,5 +489,13 @@ public class SessionInfo extends JavaScriptObject
    
    public final native RAddins getAddins() /*-{
       return this.r_addins;
+   }-*/;
+   
+   public final native PackageProvidedExtensions.Data getPackageProvidedExtensions() /*-{
+      return this.package_provided_extensions;
+   }-*/;
+
+   public final native boolean getSupportDriverLicensing() /*-{
+      return this.drivers_support_licensing;
    }-*/;
 }

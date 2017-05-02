@@ -1,7 +1,7 @@
 /*
  * SessionDependencies.cpp
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -80,7 +80,7 @@ EmbeddedPackage embeddedPackageInfo(const std::string& name)
    {
       boost::smatch match;
       std::string filename = child.filename();
-      if (boost::regex_match(filename, match, re))
+      if (regex_utils::match(filename, match, re))
       {
          EmbeddedPackage pkg;
          pkg.name = name;
@@ -398,15 +398,17 @@ Error installDependencies(const json::JsonRpcRequest& request,
    args.push_back("-e");
    args.push_back(cmd);
 
+   boost::shared_ptr<console_process::ConsoleProcessInfo> pCPI =
+         boost::make_shared<console_process::ConsoleProcessInfo>(
+            "Installing Packages", console_process::InteractionNever);
+
    // create and execute console process
    boost::shared_ptr<console_process::ConsoleProcess> pCP;
    pCP = console_process::ConsoleProcess::create(
             string_utils::utf8ToSystem(rProgramPath.absolutePath()),
             args,
             options,
-            "Installing Packages",
-            true,
-            console_process::InteractionNever);
+            pCPI);
 
    // return console process
    pResponse->setResult(pCP->toJson());
@@ -443,6 +445,6 @@ Error installEmbeddedPackage(const std::string& name)
 
 } // anonymous namespace
 
-} // namesapce session
+} // namespace session
 } // namespace rstudio
 

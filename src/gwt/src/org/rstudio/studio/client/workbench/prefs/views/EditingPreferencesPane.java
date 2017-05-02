@@ -1,7 +1,7 @@
 /*
  * EditingPreferencesPane.java
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -29,9 +29,11 @@ import com.google.gwt.user.client.ui.VerticalPanel;
 import com.google.inject.Inject;
 
 import org.rstudio.core.client.StringUtil;
+import org.rstudio.core.client.VirtualConsole;
 import org.rstudio.core.client.command.KeyboardShortcut;
 import org.rstudio.core.client.command.ShortcutManager;
 import org.rstudio.core.client.prefs.PreferencesDialogBaseResources;
+import org.rstudio.core.client.resources.ImageResource2x;
 import org.rstudio.core.client.theme.DialogTabLayoutPanel;
 import org.rstudio.core.client.widget.HelpButton;
 import org.rstudio.core.client.widget.ModifyKeyboardShortcutsWidget;
@@ -66,7 +68,8 @@ public class EditingPreferencesPane extends PreferencesPane
       
       VerticalPanel editingPanel = new VerticalPanel();
       editingPanel.add(headerLabel("General"));
-      editingPanel.add(tight(spacesForTab_ = checkboxPref("Insert spaces for tab", prefs.useSpacesForTab())));
+      editingPanel.add(tight(spacesForTab_ = checkboxPref("Insert spaces for tab", prefs.useSpacesForTab(), 
+            false /*defaultSpace*/)));
       editingPanel.add(indent(tabWidth_ = numericPref("Tab width", prefs.numSpacesForTab())));   
       editingPanel.add(checkboxPref("Insert matching parens/quotes", prefs_.insertMatching()));
       editingPanel.add(checkboxPref("Auto-indent code after paste", prefs_.reindentOnPaste()));
@@ -132,7 +135,23 @@ public class EditingPreferencesPane extends PreferencesPane
       executionLabel.getElement().getStyle().setMarginTop(8, Unit.PX);
       editingPanel.add(checkboxPref("Always save R scripts before sourcing", prefs.saveBeforeSourcing()));
       editingPanel.add(checkboxPref("Focus console after executing from source", prefs_.focusConsoleAfterExec()));
-      editingPanel.add(checkboxPref("Execute all lines in a statement", prefs_.executeMultiLineStatements()));
+      
+      executionBehavior_ = new SelectWidget(
+            "Ctrl+Enter executes: ", 
+            new String[] {
+               "Current line",
+               "Multi-line R statement",
+               "Multiple consecutive R lines"
+            },
+            new String[] {
+               UIPrefsAccessor.EXECUTE_LINE,
+               UIPrefsAccessor.EXECUTE_STATEMENT,
+               UIPrefsAccessor.EXECUTE_PARAGRAPH
+            },
+            false,
+            true,
+            false);
+      editingPanel.add(executionBehavior_);
       
       Label snippetsLabel = headerLabel("Snippets");
       snippetsLabel.getElement().getStyle().setMarginTop(8, Unit.PX);
@@ -167,14 +186,16 @@ public class EditingPreferencesPane extends PreferencesPane
       displayPanel.add(checkboxPref("Highlight selected word", prefs.highlightSelectedWord()));
       displayPanel.add(checkboxPref("Highlight selected line", prefs.highlightSelectedLine()));
       displayPanel.add(checkboxPref("Show line numbers", prefs.showLineNumbers()));
-      displayPanel.add(tight(showMargin_ = checkboxPref("Show margin", prefs.showMargin())));
+      displayPanel.add(tight(showMargin_ = checkboxPref("Show margin", 
+            prefs.showMargin(), false /*defaultSpace*/)));
       displayPanel.add(indent(marginCol_ = numericPref("Margin column", prefs.printMarginColumn())));
       displayPanel.add(checkboxPref("Show whitespace characters", prefs_.showInvisibles()));
       displayPanel.add(checkboxPref("Show indent guides", prefs_.showIndentGuides()));
       displayPanel.add(checkboxPref("Blinking cursor", prefs_.blinkingCursor()));
       displayPanel.add(checkboxPref("Show syntax highlighting in console input", prefs_.syntaxColorConsole()));
       displayPanel.add(checkboxPref("Allow scroll past end of document", prefs_.scrollPastEndOfDocument()));
-      displayPanel.add(extraSpaced(checkboxPref("Highlight R function calls", prefs_.highlightRFunctionCalls())));
+      displayPanel.add(extraSpaced(checkboxPref("Highlight R function calls", 
+            prefs_.highlightRFunctionCalls(), false /*defaultSpace*/)));
        
       foldMode_ = new SelectWidget(
             "Fold Style:",
@@ -196,7 +217,24 @@ public class EditingPreferencesPane extends PreferencesPane
       NumericValueWidget limitLengthPref =
             numericPref("Limit length of lines displayed in console to:", prefs_.truncateLongLinesInConsoleHistory());
       limitLengthPref.setWidth("36px");
-      displayPanel.add(limitLengthPref);
+      displayPanel.add(nudgeRightPlus(limitLengthPref));
+
+      consoleColorMode_ = new SelectWidget(
+            "ANSI Escape Codes:",
+            new String[] {
+                  "Show ANSI colors",
+                  "Remove ANSI codes",
+                  "Ignore ANSI codes (1.0 behavior)"
+            },
+            new String[] {
+                  Integer.toString(VirtualConsole.ANSI_COLOR_ON), 
+                  Integer.toString(VirtualConsole.ANSI_COLOR_STRIP),
+                  Integer.toString(VirtualConsole.ANSI_COLOR_OFF)
+            },
+            false,
+            true,
+            false);
+      displayPanel.add(consoleColorMode_);
       
       VerticalPanel savePanel = new VerticalPanel();
       
@@ -357,10 +395,10 @@ public class EditingPreferencesPane extends PreferencesPane
       
       final VerticalPanel rOptionsPanel = new VerticalPanel();
       rOptionsPanel.add(checkboxPref("Enable diagnostics within R function calls", prefs.diagnosticsInRFunctionCalls()));
-      rOptionsPanel.add(spaced(checkboxPref("Check arguments to R function calls", prefs.checkArgumentsToRFunctionCalls())));
-      rOptionsPanel.add(spaced(checkboxPref("Warn if variable used has no definition in scope", prefs.warnIfNoSuchVariableInScope())));
-      rOptionsPanel.add(spaced(checkboxPref("Warn if variable is defined but not used", prefs.warnIfVariableDefinedButNotUsed())));
-      rOptionsPanel.add(spaced(checkboxPref("Provide R style diagnostics (e.g. whitespace)", prefs.enableStyleDiagnostics())));
+      rOptionsPanel.add(checkboxPref("Check arguments to R function calls", prefs.checkArgumentsToRFunctionCalls()));
+      rOptionsPanel.add(checkboxPref("Warn if variable used has no definition in scope", prefs.warnIfNoSuchVariableInScope()));
+      rOptionsPanel.add(checkboxPref("Warn if variable is defined but not used", prefs.warnIfVariableDefinedButNotUsed()));
+      rOptionsPanel.add(checkboxPref("Provide R style diagnostics (e.g. whitespace)", prefs.enableStyleDiagnostics()));
       rOptionsPanel.setVisible(prefs.showDiagnosticsR().getValue());
       chkShowRDiagnostics.addValueChangeHandler(new ValueChangeHandler<Boolean>() {
          @Override
@@ -381,7 +419,8 @@ public class EditingPreferencesPane extends PreferencesPane
       Label diagShowLabel = headerLabel("Show Diagnostics");
       diagnosticsPanel.add(spacedBefore(diagShowLabel));
       diagnosticsPanel.add(checkboxPref("Show diagnostics whenever source files are saved", prefs.diagnosticsOnSave()));
-      diagnosticsPanel.add(tight(checkboxPref("Show diagnostics after keyboard is idle for a period of time", prefs.enableBackgroundDiagnostics())));
+      diagnosticsPanel.add(tight(checkboxPref("Show diagnostics after keyboard is idle for a period of time", 
+            prefs.enableBackgroundDiagnostics(), false /*defaultSpace*/)));
       diagnosticsPanel.add(indent(backgroundDiagnosticsDelayMs_ =
             numericPref("Keyboard idle time (ms):", prefs.backgroundDiagnosticsDelayMs())));
       
@@ -442,6 +481,7 @@ public class EditingPreferencesPane extends PreferencesPane
       // editing prefs
       EditingPrefs editingPrefs = prefs.getEditingPrefs();
       lineEndings_.setIntValue(editingPrefs.getLineEndings());
+      consoleColorMode_.setValue(Integer.toString(prefs_.consoleAnsiMode().getValue()));
       
       showCompletions_.setValue(prefs_.codeComplete().getValue());
       showCompletionsOther_.setValue(prefs_.codeCompleteOther().getValue());
@@ -454,6 +494,7 @@ public class EditingPreferencesPane extends PreferencesPane
       
       foldMode_.setValue(prefs_.foldStyle().getValue());
       delimiterSurroundWidget_.setValue(prefs_.surroundSelection().getValue());
+      executionBehavior_.setValue(prefs_.executionBehavior().getValue());
    }
    
    @Override
@@ -463,6 +504,8 @@ public class EditingPreferencesPane extends PreferencesPane
       
       // editing prefs
       prefs.setEditingPrefs(EditingPrefs.create(lineEndings_.getIntValue()));
+      prefs_.consoleAnsiMode().setGlobalValue(StringUtil.parseInt(
+            consoleColorMode_.getValue(), VirtualConsole.ANSI_COLOR_ON));
                       
       prefs_.defaultEncoding().setGlobalValue(encodingValue_);
       
@@ -485,6 +528,7 @@ public class EditingPreferencesPane extends PreferencesPane
            
       prefs_.foldStyle().setGlobalValue(foldMode_.getValue());
       prefs_.surroundSelection().setGlobalValue(delimiterSurroundWidget_.getValue());
+      prefs_.executionBehavior().setGlobalValue(executionBehavior_.getValue());
       
       return reload;
    }
@@ -492,7 +536,7 @@ public class EditingPreferencesPane extends PreferencesPane
    @Override
    public ImageResource getIcon()
    {
-      return PreferencesDialogBaseResources.INSTANCE.iconCodeEditing();
+      return new ImageResource2x(PreferencesDialogBaseResources.INSTANCE.iconCodeEditing2x());
    }
 
    @Override
@@ -534,9 +578,9 @@ public class EditingPreferencesPane extends PreferencesPane
    private final SelectWidget showCompletionsOther_;
    private final SelectWidget editorMode_;
    private final SelectWidget foldMode_;
+   private final SelectWidget consoleColorMode_;
    private final SelectWidget delimiterSurroundWidget_;
+   private final SelectWidget executionBehavior_;
    private final TextBoxWithButton encoding_;
    private String encodingValue_;
-   
-   
 }

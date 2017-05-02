@@ -40,7 +40,6 @@ import org.rstudio.studio.client.common.GlobalDisplay;
 import org.rstudio.studio.client.common.GlobalDisplay.NewWindowOptions;
 import org.rstudio.studio.client.common.GlobalProgressDelayer;
 import org.rstudio.studio.client.common.SimpleRequestCallback;
-import org.rstudio.studio.client.common.console.ConsoleProcess;
 import org.rstudio.studio.client.common.dependencies.DependencyManager;
 import org.rstudio.studio.client.common.filetypes.FileTypeRegistry;
 import org.rstudio.studio.client.common.vcs.AskPassManager;
@@ -49,6 +48,7 @@ import org.rstudio.studio.client.common.vcs.VCSConstants;
 import org.rstudio.studio.client.htmlpreview.HTMLPreview;
 import org.rstudio.studio.client.pdfviewer.PDFViewer;
 import org.rstudio.studio.client.projects.ProjectOpener;
+import org.rstudio.studio.client.projects.model.ProjectTemplateRegistryProvider;
 import org.rstudio.studio.client.rmarkdown.RmdOutput;
 import org.rstudio.studio.client.rmarkdown.events.ShinyGadgetDialogEvent;
 import org.rstudio.studio.client.server.Server;
@@ -67,7 +67,6 @@ import org.rstudio.studio.client.workbench.views.choosefile.ChooseFile;
 import org.rstudio.studio.client.workbench.views.files.events.DirectoryNavigateEvent;
 import org.rstudio.studio.client.workbench.views.source.editors.profiler.ProfilerPresenter;
 import org.rstudio.studio.client.workbench.views.terminal.events.CreateTerminalEvent;
-import org.rstudio.studio.client.workbench.views.vcs.common.ConsoleProgressDialog;
 import org.rstudio.studio.client.workbench.views.vcs.common.events.VcsRefreshEvent;
 import org.rstudio.studio.client.workbench.views.vcs.common.events.VcsRefreshHandler;
 import org.rstudio.studio.client.workbench.views.vcs.git.model.GitState;
@@ -102,15 +101,16 @@ public class Workbench implements BusyHandler,
                     WorkbenchNewSession newSession,
                     ProjectOpener projectOpener,
                     Provider<GitState> pGitState,
-                    ChooseFile chooseFile,   // required to force gin to create
-                    AskPassManager askPass,  // required to force gin to create
-                    PDFViewer pdfViewer,     // required to force gin to create
-                    HTMLPreview htmlPreview, // required to force gin to create
-                    ProfilerPresenter prof,  // required to force gin to create
-                    ShinyApplication sApp,   // required to force gin to create
-                    DependencyManager dm,    // required to force gin to create
-                    ApplicationVisibility av,// required to force gin to create
-                    RmdOutput rmdOutput)     // required to force gin to create    
+                    ChooseFile chooseFile,                    // force gin to create
+                    AskPassManager askPass,                   // force gin to create
+                    PDFViewer pdfViewer,                      // force gin to create
+                    HTMLPreview htmlPreview,                  // force gin to create
+                    ProfilerPresenter prof,                   // force gin to create
+                    ShinyApplication sApp,                    // force gin to create
+                    DependencyManager dm,                     // force gin to create
+                    ApplicationVisibility av,                 // force gin to create
+                    RmdOutput rmdOutput,                      // force gin to create    
+                    ProjectTemplateRegistryProvider provider) // force gin to create
   {
       view_ = view;
       workbenchContext_ = workbenchContext;
@@ -386,41 +386,21 @@ public class Workbench implements BusyHandler,
             public void onResponseReceived(TerminalOptions options)
             {
                Desktop.getFrame().openTerminal(options.getTerminalPath(),
-                                               options.getWorkingDirectory(),
-                                               options.getExtraPathEntries());
+                     options.getWorkingDirectory(),
+                     options.getExtraPathEntries());
             }
          });
       }
       else
       {
-         final ProgressIndicator indicator = new GlobalProgressDelayer(
-               globalDisplay_, 500, "Starting shell...").getIndicator();
-         
-         server_.startShellDialog(ConsoleProcess.TerminalType.DUMB, 
-                                  80, 1, 
-                                  true, /* modal dialog */
-                                  new ServerRequestCallback<ConsoleProcess>() 
-         {
-            @Override
-            public void onResponseReceived(ConsoleProcess proc)
-            {
-               indicator.onCompleted();
-               new ConsoleProgressDialog(proc, server_).showModal();
-            }
-            
-            @Override
-            public void onError(ServerError error)
-            {
-               indicator.onError(error.getUserMessage());
-            }
-         });
+         onNewTerminal();
       }
    }
    
    @Handler
    public void onNewTerminal()
    {
-         eventBus_.fireEvent(new CreateTerminalEvent());
+      eventBus_.fireEvent(new CreateTerminalEvent());
    }
       
    @Handler

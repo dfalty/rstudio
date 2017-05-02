@@ -1,7 +1,7 @@
 /*
  * ShortcutManager.java
  *
- * Copyright (C) 2009-15 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -38,9 +38,11 @@ import org.rstudio.studio.client.RStudioGinjector;
 import org.rstudio.studio.client.application.events.EventBus;
 import org.rstudio.studio.client.events.EditEvent;
 import org.rstudio.studio.client.workbench.addins.AddinsCommandManager;
+import org.rstudio.studio.client.workbench.commands.Commands;
 import org.rstudio.studio.client.workbench.commands.RStudioCommandExecutedFromShortcutEvent;
 import org.rstudio.studio.client.workbench.views.source.editors.text.ace.AceEditorNative;
 import org.rstudio.studio.client.workbench.views.source.editors.text.ace.AceKeyboardActivityEvent;
+import org.rstudio.studio.client.workbench.views.terminal.xterm.XTermWidget;
 
 import com.google.gwt.core.client.Scheduler;
 import com.google.gwt.core.client.Scheduler.ScheduledCommand;
@@ -145,13 +147,15 @@ public class ShortcutManager implements NativePreviewHandler,
                            EditorCommandManager editorCommands,
                            UserCommandManager userCommands,
                            AddinsCommandManager addins,
-                           EventBus events)
+                           EventBus events,
+                           Commands commands)
    {
       appCommands_ = appCommands;
       editorCommands_ = editorCommands;
       userCommands_ = userCommands;
       addins_ = addins;
       events_ = events;
+      commands_ = commands;
    }
 
    public boolean isEnabled()
@@ -243,7 +247,11 @@ public class ShortcutManager implements NativePreviewHandler,
          // Setting the shortcut on the command just registers this binding as the
          // default shortcut for the command. This allows UI (e.g. menu items) to easily
          // look up and display an active shortcut, without displaying _all_ active shortcuts.
-         command.setShortcut(shortcut);
+         //
+         // Only show shortcuts that are enabled by default.
+         int disableFlags = shortcut.getDisableModes();
+         if ((disableFlags & KeyboardShortcut.MODE_DEFAULT) == 0)
+            command.setShortcut(shortcut);
          
          // Add the command into the keymap, ensuring it can be executed on the associated
          // keypress.
@@ -418,7 +426,15 @@ public class ShortcutManager implements NativePreviewHandler,
          return false;
       }
       
-      KeyCombination keyCombination = new KeyCombination(event);
+      int keyCode = event.getKeyCode();
+      int modifier = KeyboardShortcut.getModifierValue(event);
+      
+      // Convert Firefox hyphen key code to 'normal' hyphen keycode
+      // since we have code wired to that expectation
+      if (keyCode == 173)
+         keyCode = 189;
+      
+      KeyCombination keyCombination = new KeyCombination(keyCode, modifier);
       
       // Disable 'Ctrl+F' keybinding when Ace editor in Vim mode
       // is focused.
@@ -454,6 +470,34 @@ public class ShortcutManager implements NativePreviewHandler,
          if (binding != null)
          {
             keyBuffer_.clear();
+
+            if (XTermWidget.isXTerm(Element.as(event.getEventTarget())))
+            {
+               if (binding.getId() == "consoleClear")
+               {
+                  // special case; we expect users will try to use Ctrl+L to
+                  // clear the terminal, and don't want that to actually
+                  // clear the currently hidden console instead
+                  event.stopPropagation();
+                  commands_.clearTerminalScrollbackBuffer().execute();
+                  return false;
+               }
+               else if (binding.getId() == "closeSourceDoc")
+               {
+                  // special case: Ctrl+W is usually bound to closeSourceDoc, 
+                  // but this key sequence is frequently used in bash to kill 
+                  // the word behind the cursor; so we'll ignore this command 
+                  // when focus is in the terminal and let terminal see keys
+                  return false;
+               } 
+               if (binding.getContext() != AppCommand.Context.Workbench &&
+                     binding.getContext() != AppCommand.Context.Addin &&
+                     binding.getContext() != AppCommand.Context.PackageDevelopment)
+               {
+                  // Let terminal see the keyboard input and don't execute command.
+                  return false;
+               }
+            }
             event.stopPropagation();
             binding.execute();
             return true;
@@ -663,5 +707,6 @@ public class ShortcutManager implements NativePreviewHandler,
    private ApplicationCommandManager appCommands_;
    private AddinsCommandManager addins_;
    private EventBus events_;
+   private Commands commands_;
    
 }

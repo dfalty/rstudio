@@ -19,6 +19,7 @@
 #include <boost/algorithm/string/trim.hpp>
 
 #include <core/Error.hpp>
+#include <core/RegexUtils.hpp>
 #include <core/SafeConvert.hpp>
 #include <core/system/Process.hpp>
 
@@ -77,7 +78,7 @@ SynctexViewerInfo discoverViewer()
    // extract version
    boost::smatch match;
    boost::regex re("^.*(\\d+)\\.(\\d+)\\.(\\d)+$");
-   if (boost::regex_match(stdOut, match, re))
+   if (regex_utils::match(stdOut, match, re))
    {
       SynctexViewerInfo sv;
       sv.name = QString::fromUtf8("Evince");

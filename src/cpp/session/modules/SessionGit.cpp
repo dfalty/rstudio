@@ -1,7 +1,7 @@
 /*
  * SessionGit.cpp
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -15,11 +15,16 @@
 #include "SessionGit.hpp"
 
 #include <signal.h>
+#include <sys/stat.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #include <shlobj.h>
 #include <shlwapi.h>
+#endif
+
+#ifndef _WIN32
+# include <core/system/PosixNfs.hpp>
 #endif
 
 #include <boost/algorithm/string.hpp>
@@ -33,6 +38,7 @@
 #include <boost/optional.hpp>
 #include <boost/regex.hpp>
 
+#include <core/Algorithm.hpp>
 #include <core/BoostLamda.hpp>
 #include <core/json/JsonRpc.hpp>
 #include <core/system/Crypto.hpp>
@@ -203,10 +209,80 @@ std::string gitBin()
 }
 #endif
 
+bool waitForIndexLock(const FilePath& workingDir)
+{
+   using namespace boost::posix_time;
+   
+   // count the number of retries (avoid getting stuck in wait loops when
+   // an index.lock file exists and is never cleaned up)
+   static int retryCount = 0;
+   
+   FilePath lockPath = workingDir.childPath(".git/index.lock");
+   
+   // first stab attempt to see if the lockfile exists
+   if (!lockPath.exists())
+   {
+      retryCount = 0;
+      return true;
+   }
+
+#ifndef _WIN32
+   // attempt to clear nfs cache -- don't log errors as this is done
+   // just to ensure that we have a 'fresh' view of the index.lock file
+   // in the later codepaths
+   struct stat info;
+   bool cleared;
+   core::system::nfs::statWithCacheClear(lockPath, &cleared, &info);
+#endif
+   
+   // otherwise, retry for 1s
+   for (std::size_t i = 0; i < 5; ++i)
+   {
+      // if there's no lockfile, we can proceed
+      if (!lockPath.exists())
+      {
+         retryCount = 0;
+         return true;
+      }
+      
+      // if there is a stale lockfile, then try cleaning it up
+      // if we're able to remove a stale lockfile, then we can
+      // escape early
+      else
+      {
+         double diff = ::difftime(::time(NULL), lockPath.lastWriteTime());
+         if (diff > 600)
+         {
+            Error error = lockPath.remove();
+            if (!error)
+            {
+               retryCount = 0;
+               return true;
+            }
+         }
+      }
+      
+      // if we've tried too many times, just bail out (avoid stalling the
+      // process on what seems to be a stale index.lock)
+      if (retryCount > 100)
+         break;
+
+      // sleep for a bit, then retry
+      boost::this_thread::sleep(milliseconds(200));
+      ++retryCount;
+   }
+   
+   return false;
+}
+
 Error gitExec(const ShellArgs& args,
               const core::FilePath& workingDir,
               core::system::ProcessResult* pResult)
 {
+   // if we see an 'index.lock' file within the associated
+   // git repository, try waiting a bit until it's removed
+   waitForIndexLock(workingDir);
+   
    core::system::ProcessOptions options = procOptions();
    options.workingDir = workingDir;
    // Important to ensure SSH_ASKPASS works
@@ -226,6 +302,23 @@ Error gitExec(const ShellArgs& args,
                         options,
                         pResult);
 #endif
+}
+
+std::string gitText(const ShellArgs& args)
+{
+   std::stringstream ss;
+   
+   ss << ">>> ";
+   
+   if (s_gitExePath.empty())
+      ss << "git ";
+   else
+      ss << s_gitExePath << " ";
+   
+   std::string arguments = core::algorithm::join(args, " ");
+   ss << arguments << "\n";
+   
+   return ss.str();
 }
 
 bool commitIsMatch(const std::vector<std::string>& patterns,
@@ -287,7 +380,8 @@ protected:
       if (pExitCode)
          *pExitCode = result.exitStatus;
 
-      if (result.exitStatus != EXIT_SUCCESS)
+      if (result.exitStatus != EXIT_SUCCESS &&
+          !result.stdErr.empty())
       {
          LOG_DEBUG_MESSAGE(result.stdErr);
       }
@@ -297,7 +391,6 @@ protected:
 
    core::Error createConsoleProc(const ShellArgs& args,
                                  const std::string& caption,
-                                 bool dialog,
                                  boost::shared_ptr<ConsoleProcess>* ppCP,
                                  const boost::optional<FilePath>& workingDir=boost::optional<FilePath>())
    {
@@ -312,23 +405,17 @@ protected:
       else if (!workingDir.get().empty())
          options.workingDir = workingDir.get();
 
+      boost::shared_ptr<ConsoleProcessInfo> pCPI =
+            boost::make_shared<ConsoleProcessInfo>(caption,
+                                                   console_process::InteractionNever);
+      
 #ifdef _WIN32
-      *ppCP = ConsoleProcess::create(gitBin(),
-                                     args.args(),
-                                     options,
-                                     caption,
-                                     dialog,
-                                     console_process::InteractionNever,
-                                     console_process::kDefaultMaxOutputLines);
+      *ppCP = ConsoleProcess::create(gitBin(), args.args(), options, pCPI);
 #else
-      *ppCP = ConsoleProcess::create(git() << args.args(),
-                                     options,
-                                     caption,
-                                     dialog,
-                                     console_process::InteractionNever,
-                                     console_process::kDefaultMaxOutputLines);
+      *ppCP = ConsoleProcess::create(git() << args.args(), options, pCPI);
 #endif
-
+      
+      (*ppCP)->enquePrompt(gitText(args));
       (*ppCP)->onExit().connect(boost::bind(&enqueueRefreshEvent));
 
       return Success();
@@ -392,15 +479,27 @@ public:
    {
       using namespace boost;
 
+      // objects to be populated from git's output
       std::vector<FileWithStatus> files;
-
-      std::vector<std::string> lines;
+      
+      // build shell arguments
+      ShellArgs arguments;
+      
+      // on some platforms, git will return paths which contain characters
+      // not in the ASCII set with a so-called 'quoted octal encoding'.
+      // this is controlled by the 'core.quotepath' configuration option;
+      // by setting this to off we ensure that git will return us a
+      // plain UTF-8 encoded path which requires no further processing
+      arguments << "-c" << "core.quotepath=off"
+                << "status" << "--porcelain" << "--" << dir;
+      
       std::string output;
-      Error error = runGit(ShellArgs() << "status" << "--porcelain" << "--" << dir,
-                           &output);
+      Error error = runGit(arguments, &output);
       if (error)
          return error;
-      lines = split(output);
+      
+      // split and parse each line of status output
+      std::vector<std::string> lines = split(output);
 
       for (std::vector<std::string>::iterator it = lines.begin();
            it != lines.end();
@@ -415,21 +514,13 @@ public:
 
          std::string filePath = line.substr(3);
 
-         // git status --porcelain will quote paths that contain special
-         // characters (e.g. spaces on Windows). strip those characters
-         // when encountered
-         std::string::size_type n = filePath.size();
-         if (n >= 2 && filePath[0] == '"' && filePath[n - 1] == '"')
-         {
-            filePath = filePath.substr(1, n - 2);
-            boost::algorithm::replace_all(filePath, "\\\"", "\"");
-         }
-
          // remove trailing slashes
          if (filePath.length() > 1 && filePath[filePath.length() - 1] == '/')
             filePath = filePath.substr(0, filePath.size() - 1);
 
-         file.path = root_.childPath(string_utils::systemToUtf8(filePath));
+         // file paths are returned as UTF-8 encoded paths,
+         // so no need to re-encode here
+         file.path = root_.childPath(filePath);
 
          files.push_back(file);
       }
@@ -558,6 +649,15 @@ public:
          return Success();
       }
    }
+   
+   core::Error createBranch(const std::string& branch,
+                            boost::shared_ptr<ConsoleProcess>* ppCP)
+   {
+      return createConsoleProc(
+               ShellArgs() << "checkout" << "-B" << branch,
+               "Git Branch",
+               ppCP);
+   }
 
    core::Error listBranches(std::vector<std::string>* pBranches,
                             boost::optional<size_t>* pActiveBranchIndex)
@@ -584,6 +684,56 @@ public:
       s_branches = *pBranches;
       return Success();
    }
+   
+   core::Error listRemotes(json::Array* pRemotes)
+   {
+      std::string output;
+      Error error = runGit(ShellArgs() << "remote" << "--verbose", &output);
+      if (error)
+         return error;
+      
+      std::string trimmed = string_utils::trimWhitespace(output);
+      if (trimmed.empty())
+         return Success();
+      
+      boost::regex reSpaces("\\s+");
+      std::vector<std::string> splat = split(trimmed);
+      BOOST_FOREACH(const std::string& line, splat)
+      {
+         boost::smatch match;
+         if (!regex_utils::search(line, match, reSpaces))
+            continue;
+         
+         std::string remote = std::string(line.begin(), match[0].first);
+         std::string url = std::string(match[0].second, line.end());
+         std::string type = "(unknown)";
+         
+         if (boost::algorithm::ends_with(url, "(fetch)"))
+         {
+            url = url.substr(0, url.size() - strlen("(fetch)"));
+            type = "fetch";
+         }
+         else if (boost::algorithm::ends_with(url, "(push)"))
+         {
+            url = url.substr(0, url.size() - strlen("(push)"));
+            type = "push";
+         }
+         
+         json::Object objectJson;
+         objectJson["remote"] = string_utils::trimWhitespace(remote);
+         objectJson["url"] = string_utils::trimWhitespace(url);
+         objectJson["type"] = string_utils::trimWhitespace(type);
+         pRemotes->push_back(objectJson);
+      }
+
+      return Success();
+   }
+   
+   core::Error addRemote(const std::string& name,
+                         const std::string& url)
+   {
+      return runGit(ShellArgs() << "remote" << "add" << name << url);
+   }
 
    core::Error checkout(const std::string& id,
                         boost::shared_ptr<ConsoleProcess>* ppCP)
@@ -602,72 +752,89 @@ public:
             // otherwise just check out our local copy
             if (core::algorithm::contains(s_branches, localBranch))
             {
-               args << "checkout" << localBranch << "--";
+               args << "checkout" << localBranch;
             }
             else
             {
-               args << "checkout" << "-b" << localBranch << remoteBranch << "--";
+               args << "checkout" << "-b" << localBranch << remoteBranch;
             }
          }
          else
          {
             // shouldn't happen, but provide valid shell command regardless
-            args << "checkout" << id << "--";
+            args << "checkout" << id;
          }
       }
       else
       {
-         args << "checkout" << id << "--";
+         args << "checkout" << id;
       }
       
       return createConsoleProc(args,
                                "Git Checkout " + id,
-                               true,
                                ppCP);
    }
+   
+   core::Error checkoutRemote(const std::string& branch,
+                              const std::string& remote,
+                              boost::shared_ptr<ConsoleProcess>* ppCP)
+   {
+      std::string localBranch  = branch;
+      std::string remoteBranch = remote + "/" + branch;
+      
+      return createConsoleProc(
+               ShellArgs() << "checkout" << "-b" << localBranch << remoteBranch,
+               "Git Checkout " + branch,
+               ppCP);
+   }
 
-   core::Error commit(std::string message, bool amend, bool signOff,
+   core::Error commit(std::string message,
+                      bool amend,
+                      bool signOff,
                       boost::shared_ptr<ConsoleProcess>* ppCP)
    {
-      bool alwaysUseUtf8 = s_gitVersion >= GIT_1_7_2;
-
-      if (!alwaysUseUtf8)
+      using namespace string_utils;
+      
+      // detect the active commit encoding for this project
+      std::string encoding;
+      int exitCode;
+      Error error = runGit(ShellArgs() << "config" << "i18n.commitencoding",
+                           &encoding,
+                           NULL,
+                           &exitCode);
+      
+      // normalize output (no config specified implies UTF-8 default)
+      encoding = toUpper(trimWhitespace(encoding));
+      if (encoding.empty())
+         encoding = "UTF-8";
+      
+      // convert from UTF-8 to user encoding if required
+      if (encoding != "UTF-8")
       {
-         std::string encoding;
-         int exitCode;
-         Error error = runGit(ShellArgs() << "config" << "i18n.commitencoding",
-                              &encoding,
-                              NULL,
-                              &exitCode);
-         if (!error)
+         error = r::util::iconvstr(message, "UTF-8", encoding, false, &message);
+         if (error)
          {
-            boost::algorithm::trim_right(encoding);
-            if (!encoding.empty() && encoding != "UTF-8")
-            {
-               error = r::util::iconvstr(message,
-                                         "UTF-8",
-                                         encoding,
-                                         false,
-                                         &message);
-               if (error)
-               {
-                  return systemError(boost::system::errc::illegal_byte_sequence,
-                                     "The commit message could not be encoded to " + encoding + ".\n\nYou can correct this by calling 'git config i18n.commitencoding UTF-8' and committing again.",
-                                     ERROR_LOCATION);
-               }
-            }
+            return systemError(
+                     boost::system::errc::illegal_byte_sequence,
+                     "The commit message could not be encoded to " + encoding +
+                     ".\n\n You can correct this by calling "
+                     "'git config i18n.commitencoding UTF-8' "
+                     "and committing again.",
+                     ERROR_LOCATION);
          }
       }
 
-      FilePath tempFile = module_context::tempFile("gitmsg", "txt");
+      // write commit message to file
+      FilePath tempFile = module_context::tempFile("git-commit-message-", "txt");
       boost::shared_ptr<std::ostream> pStream;
 
-      Error error = tempFile.open_w(&pStream);
+      error = tempFile.open_w(&pStream);
       if (error)
          return error;
 
       *pStream << message;
 
+      // append merge commit message when appropriate
       FilePath gitDir = root_.childPath(".git");
       if (gitDir.childPath("MERGE_HEAD").exists())
       {
@@ -688,10 +855,9 @@ public:
       pStream->flush();
       pStream.reset();  // release file handle
 
-      // Make sure we override i18n settings that may cause the commit message
-      // to be marked as using an encoding other than utf-8.
+      // override a user-specified default encoding if necessary
       ShellArgs args;
-      if (alwaysUseUtf8)
+      if (encoding != "UTF-8")
          args << "-c" << "i18n.commitencoding=utf-8";
       args << "commit" << "-F" << tempFile;
 
@@ -702,7 +868,6 @@ public:
 
       return createConsoleProc(args,
                                "Git Commit",
-                               true,
                                ppCP);
    }
 
@@ -716,7 +881,6 @@ public:
       return
             createConsoleProc(ShellArgs() << "clone" << "--progress" << url << dirName,
                               "Clone Repository",
-                              true,
                               ppCP,
                               boost::optional<FilePath>(parentPath));
    }
@@ -791,13 +955,23 @@ public:
          args << remote << merge;
       }
 
-      return createConsoleProc(args, "Git Push", true, ppCP);
+      return createConsoleProc(args, "Git Push", ppCP);
+   }
+   
+   core::Error pushBranch(const std::string& branch,
+                          const std::string& remote,
+                          boost::shared_ptr<ConsoleProcess>* ppCP)
+   {
+      return createConsoleProc(
+               ShellArgs() << "push" << "-u" << remote << branch,
+               "Git Push",
+               ppCP);
    }
 
    core::Error pull(boost::shared_ptr<ConsoleProcess>* ppCP)
    {
       return createConsoleProc(ShellArgs() << "pull",
-                               "Git Pull", true, ppCP);
+                               "Git Pull", ppCP);
    }
 
    core::Error doDiffFile(const FilePath& filePath,
@@ -887,7 +1061,7 @@ public:
    {
       static boost::regex commitRegex("^([a-z0-9]+)(\\s+\\((.*)\\))?");
       boost::smatch smatch;
-      if (boost::regex_match(value, smatch, commitRegex))
+      if (regex_utils::match(value, smatch, commitRegex))
       {
          pCommitInfo->id = smatch[1];
          std::vector<std::string> refs;
@@ -1056,7 +1230,7 @@ public:
            it++)
       {
          boost::smatch smatch;
-         if (boost::regex_search(*it, smatch, kvregex))
+         if (regex_utils::search(*it, smatch, kvregex))
          {
             std::string key = smatch[1];
             std::string value = smatch[2];
@@ -1082,7 +1256,7 @@ public:
             else if (key == "author" || key == "committer")
             {
                boost::smatch authTimeMatch;
-               if (boost::regex_search(value, authTimeMatch, authTimeRegex))
+               if (regex_utils::search(value, authTimeMatch, authTimeRegex))
                {
                   std::string author = authTimeMatch[1];
                   std::string time = authTimeMatch[2];
@@ -1429,6 +1603,26 @@ Error vcsUnstage(const json::JsonRpcRequest& request,
    return s_git_.unstage(resolveAliasedPaths(paths, true, true));
 }
 
+Error vcsCreateBranch(const json::JsonRpcRequest& request,
+                      json::JsonRpcResponse* pResponse)
+{
+   Error error;
+   std::string branch;
+   
+   error = json::readParams(request.params, &branch);
+   if (error)
+      return error;
+   
+   boost::shared_ptr<ConsoleProcess> pCP;
+   error = s_git_.createBranch(branch, &pCP);
+   if (error)
+      return error;
+   
+   pResponse->setResult(pCP->toJson());
+
+   return Success();
+}
+
 Error vcsListBranches(const json::JsonRpcRequest& request,
                       json::JsonRpcResponse* pResponse)
 {
@@ -1474,6 +1668,27 @@ Error vcsCheckout(const json::JsonRpcRequest& request,
 
    return Success();
 }
+
+Error vcsCheckoutRemote(const json::JsonRpcRequest& request,
+                        json::JsonRpcResponse* pResponse)
+{
+   RefreshOnExit scope;
+   
+   std::string branch, remote;
+   Error error = json::readParams(request.params, &branch, &remote);
+   if (error)
+      return error;
+   
+   boost::shared_ptr<ConsoleProcess> pCP;
+   error = s_git_.checkoutRemote(branch, remote, &pCP);
+   if (error)
+      return error;
+   
+   pResponse->setResult(pCP->toJson());
+   
+   return Success();
+}
+
 
 Error vcsFullStatus(const json::JsonRpcRequest&,
                     json::JsonRpcResponse* pResponse)
@@ -1574,10 +1789,30 @@ Error vcsPush(const json::JsonRpcRequest& request,
    return Success();
 }
 
+Error vcsPushBranch(const json::JsonRpcRequest& request,
+                    json::JsonRpcResponse* pResponse)
+{
+   std::string branch, remote;
+   Error error = json::readParams(request.params, &branch, &remote);
+   if (error)
+      return error;
+   
+   boost::shared_ptr<ConsoleProcess> pCP;
+   error = s_git_.pushBranch(branch, remote, &pCP);
+   if (error)
+      return error;
+
+   ask_pass::setActiveWindow(request.sourceWindow);
+
+   pResponse->setResult(pCP->toJson());
+
+   return Success();
+}
+
 Error vcsPull(const json::JsonRpcRequest& request,
               json::JsonRpcResponse* pResponse)
 {
-    boost::shared_ptr<ConsoleProcess> pCP;
+   boost::shared_ptr<ConsoleProcess> pCP;
    Error error = s_git_.pull(&pCP);
    if (error)
       return error;
@@ -1736,6 +1971,34 @@ Error vcsSetIgnores(const json::JsonRpcRequest& request,
    return Success();
 }
 
+Error vcsListRemotes(const json::JsonRpcRequest& request,
+                     json::JsonRpcResponse* pResponse)
+{
+   pResponse->setResult(json::Array());
+   
+   json::Array remotesJson;
+   Error error = s_git_.listRemotes(&remotesJson);
+   if (error)
+      LOG_ERROR(error);
+   
+   pResponse->setResult(remotesJson);
+   return Success();
+}
+
+Error vcsAddRemote(const json::JsonRpcRequest& request,
+                   json::JsonRpcResponse* pResponse)
+{
+   std::string name, url;
+   Error error = json::readParams(request.params, &name, &url);
+   if (error)
+      return error;
+   
+   error = s_git_.addRemote(name, url);
+   if (error)
+      return error;
+   
+   return vcsListRemotes(request, pResponse);
+}
 
 std::string getUpstream(const std::string& branch = std::string())
 {
@@ -2166,22 +2429,26 @@ bool ensureSSHAgentIsRunning()
    // In addition to dumping the ssh-agent output, we also need to parse
    // it so we can modify rsession's environment to use the new ssh-agent
    // as well.
-   boost::sregex_iterator it(result.stdOut.begin(), result.stdOut.end(),
-                             boost::regex("^([A-Za-z0-9_]+)=([^;]+);"));
-   boost::sregex_iterator end;
-   for (; it != end; it++)
+   try
    {
-      std::string name = (*it).str(1);
-      std::string value = (*it).str(2);
-      core::system::setenv(name, value);
-
-      if (name == "SSH_AGENT_PID")
+      boost::sregex_iterator it(result.stdOut.begin(), result.stdOut.end(),
+                                boost::regex("^([A-Za-z0-9_]+)=([^;]+);"));
+      boost::sregex_iterator end;
+      for (; it != end; it++)
       {
-         int pid = safe_convert::stringTo<int>(value, 0);
-         if (pid)
-            s_pidsToTerminate_.push_back(pid);
+         std::string name = (*it).str(1);
+         std::string value = (*it).str(2);
+         core::system::setenv(name, value);
+
+         if (name == "SSH_AGENT_PID")
+         {
+            int pid = safe_convert::stringTo<int>(value, 0);
+            if (pid)
+               s_pidsToTerminate_.push_back(pid);
+         }
       }
    }
+   CATCH_UNEXPECTED_EXCEPTION;
 
    return true;
 }
@@ -2220,7 +2487,7 @@ std::string transformKeyPath(const std::string& path)
 {
 #ifdef _WIN32
    boost::smatch match;
-   if (boost::regex_match(path, match, boost::regex("/([a-zA-Z])/.*")))
+   if (regex_utils::match(path, match, boost::regex("/([a-zA-Z])/.*")))
    {
       return match[1] + std::string(":") + path.substr(2);
    }
@@ -2240,13 +2507,13 @@ void postbackSSHAskPass(const std::string& prompt,
    FilePath keyFile;
 
    // This is what the prompt looks like on OpenSSH_4.6p1 (Windows)
-   if (boost::regex_match(prompt, match, boost::regex("Enter passphrase for key '(.+)': ")))
+   if (regex_utils::match(prompt, match, boost::regex("Enter passphrase for key '(.+)': ")))
    {
       promptToRemember = true;
       keyFile = FilePath(transformKeyPath(match[1]));
    }
    // This is what the prompt looks like on OpenSSH_5.8p1 Debian-7ubuntu1 (Ubuntu 11.10)
-   else if (boost::regex_match(prompt, match, boost::regex("Enter passphrase for (.+): ")))
+   else if (regex_utils::match(prompt, match, boost::regex("Enter passphrase for (.+): ")))
    {
       promptToRemember = true;
       keyFile = FilePath(transformKeyPath(match[1]));
@@ -2633,7 +2900,7 @@ Error augmentGitIgnore(const FilePath& gitIgnoreFile)
       if (error)
          return error;
 
-      if (boost::regex_search(strIgnore, boost::regex("^\\.Rproj\\.user$")))
+      if (regex_utils::search(strIgnore, boost::regex("^\\.Rproj\\.user$")))
          return Success();
 
       bool addExtraNewline = strIgnore.size() > 0
@@ -2824,7 +3091,7 @@ bool initGitBin()
       if (result.exitStatus == 0)
       {
          boost::smatch matches;
-         if (boost::regex_search(result.stdOut,
+         if (regex_utils::search(result.stdOut,
                                  matches,
                                  boost::regex("\\d+(\\.\\d+)+")))
          {
@@ -2963,12 +3230,15 @@ core::Error initialize()
       (bind(registerRpcMethod, "git_revert", vcsRevert))
       (bind(registerRpcMethod, "git_stage", vcsStage))
       (bind(registerRpcMethod, "git_unstage", vcsUnstage))
+      (bind(registerRpcMethod, "git_create_branch", vcsCreateBranch))
       (bind(registerRpcMethod, "git_list_branches", vcsListBranches))
       (bind(registerRpcMethod, "git_checkout", vcsCheckout))
+      (bind(registerRpcMethod, "git_checkout_remote", vcsCheckoutRemote))
       (bind(registerRpcMethod, "git_full_status", vcsFullStatus))
       (bind(registerRpcMethod, "git_all_status", vcsAllStatus))
       (bind(registerRpcMethod, "git_commit", vcsCommit))
       (bind(registerRpcMethod, "git_push", vcsPush))
+      (bind(registerRpcMethod, "git_push_branch", vcsPushBranch))
       (bind(registerRpcMethod, "git_pull", vcsPull))
       (bind(registerRpcMethod, "git_diff_file", vcsDiffFile))
       (bind(registerRpcMethod, "git_apply_patch", vcsApplyPatch))
@@ -2982,6 +3252,8 @@ core::Error initialize()
       (bind(registerRpcMethod, "git_init_repo", vcsInitRepo))
       (bind(registerRpcMethod, "git_get_ignores", vcsGetIgnores))
       (bind(registerRpcMethod, "git_set_ignores", vcsSetIgnores))
+      (bind(registerRpcMethod, "git_list_remotes", vcsListRemotes))
+      (bind(registerRpcMethod, "git_add_remote", vcsAddRemote))
       (bind(registerRpcMethod, "git_github_remote_url", vcsGithubRemoteUrl));
    error = initBlock.execute();
    if (error)

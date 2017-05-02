@@ -146,9 +146,11 @@ assign(x = ".rs.acCompletionTypes",
       "@inheritParams ",
       "@inheritSection ",
       "@keywords ",
+      "@md",
       "@method ",
       "@name ",
       "@note ",
+      "@noMd",
       "@noRd",
       "@param ",
       "@rawRd ",
@@ -277,7 +279,14 @@ assign(x = ".rs.acCompletionTypes",
       absolutePaths <- index$paths
    }
    
-   absolutePaths <- sort(union(absolutePaths, .rs.listFilesFuzzy(directory, tokenName)))
+   # Merge in completions from the current directory.
+   dirPaths <- .rs.listFilesFuzzy(directory, tokenName)
+   if (directoriesOnly)
+   {
+      dirInfo <- file.info(dirPaths)
+      dirPaths <- dirPaths[dirInfo$isdir]
+   }
+   absolutePaths <- sort(union(absolutePaths, dirPaths))
    
    ## Bail out early if we didn't get any completions.
    if (!length(absolutePaths))
@@ -596,7 +605,22 @@ assign(x = ".rs.acCompletionTypes",
          
       }
       
-      ## Base case
+      # Resolve formals from a classGeneratorFunction based
+      # on its slots
+      if (is.null(formals) &&
+          inherits(object, "classGeneratorFunction"))
+      {
+         try(silent = TRUE, {
+            class <- object@className
+            defn <- getClass(class)
+            slots <- defn@slots
+            formals <- list(
+               formals = names(slots),
+               methods = rep(class, length(slots))
+            )
+         })
+      }
+      
       # Resolve formals from the function itself
       if (is.null(formals))
       {
@@ -660,7 +684,8 @@ assign(x = ".rs.acCompletionTypes",
       argCompletions <- .rs.getCompletionsArgument(
          token = token,
          activeArg = activeArg,
-         functionCall = functionCall
+         functionCall = functionCall,
+         envir = envir
       )
       
       # If the active argument was 'formula' and we were able
@@ -1073,6 +1098,21 @@ assign(x = ".rs.acCompletionTypes",
          {
             allNames <- dollarNamesMethod(object)
             
+            # rJava will include closing parentheses as part of the
+            # completion list -- clean those up and use them to infer
+            # symbol types
+            if ("rJava" %in% loadedNamespaces() &&
+                identical(environment(dollarNamesMethod), asNamespace("rJava")))
+            {
+               types <- ifelse(
+                  grepl("[()]$", allNames),
+                  .rs.acCompletionTypes$FUNCTION,
+                  .rs.acCompletionTypes$UNKNOWN
+               )
+               allNames <- gsub("[()]*$", "", allNames)
+               attr(allNames, "types") <- types
+            }
+            
             # check for custom helpHandler
             helpHandler <- attr(allNames, "helpHandler", exact = TRUE)
          }
@@ -1281,15 +1321,20 @@ assign(x = ".rs.acCompletionTypes",
    
 })
 
+.rs.addFunction("listIndexedPackages", function()
+{
+   .Call("rs_listIndexedPackages")
+})
+
 .rs.addFunction("getCompletionsPackages", function(token,
                                                    appendColons = FALSE,
                                                    excludeOtherCompletions = FALSE,
                                                    quote = !appendColons)
 {
-   # List all directories within the .libPaths()
-   allPackages <- Reduce(union, lapply(.libPaths(), function(libPath) {
-      .rs.listDirs(libPath, full.names = FALSE, recursive = FALSE)
-   }))
+   allPackages <- basename(.rs.listIndexedPackages())
+   
+   # In case indexing is disabled, include any loaded namespaces by default
+   allPackages <- union(allPackages, loadedNamespaces())
    
    # Not sure why 'DESCRIPTION' might show up here, but let's take it out
    allPackages <- setdiff(allPackages, "DESCRIPTION")
@@ -1705,7 +1750,8 @@ assign(x = ".rs.acCompletionTypes",
                                                   excludeArgs,
                                                   excludeArgsFromObject,
                                                   filePath,
-                                                  documentId)
+                                                  documentId,
+                                                  line)
 {
    # Ensure UTF-8 encoding, as that's the encoding set when passed down from
    # the client
@@ -1722,6 +1768,20 @@ assign(x = ".rs.acCompletionTypes",
    # parameterized R Markdown documents
    if (.rs.injectKnitrParamsObject(documentId))
       on.exit(.rs.removeKnitrParamsObject(), add = TRUE)
+
+   # If custom completions have been set through
+   # 'rc.options("custom.completions")',
+   # then use the internal R completions instead.
+   if (.rs.isCustomCompletionsEnabled()) {
+      
+      completions <- tryCatch(
+         .rs.getCustomRCompletions(line),
+         error = identity
+      )
+      
+      if (!inherits(completions, "error"))
+         return(completions)
+   }
    
    # Get the currently active frame
    envir <- .rs.getActiveFrame()
@@ -2531,7 +2591,7 @@ assign(x = ".rs.acCompletionTypes",
    # remove 'base' element if it's just TRUE
    if (length(importCompletions))
    {
-      if (isTRUE(importCompletions$base))
+      if (isTRUE(importCompletions[["base"]]))
          importCompletions$base <- NULL
    }
    
@@ -3193,4 +3253,36 @@ assign(x = ".rs.acCompletionTypes",
    }
    
    .rs.scalar(newSnippet)
+})
+
+.rs.addFunction("isCustomCompletionsEnabled", function()
+{
+   completer <- utils::rc.getOption("custom.completer")
+   is.function(completer)
+})
+
+.rs.addFunction("getCustomRCompletions", function(line)
+{
+   utils:::.assignLinebuffer(line)
+   utils:::.assignEnd(nchar(line))
+   token <- utils:::.guessTokenFromLine()
+   utils:::.completeToken()
+   results <- utils:::.retrieveCompletions()
+   
+   packages <- sub('^package:', '', .rs.which(results))
+   
+   # ensure spaces around =
+   results <- sub("=$", " = ", results)
+   
+   choose = packages == '.GlobalEnv'
+   results.sorted = c(results[choose], results[!choose])
+   packages.sorted = c(packages[choose], packages[!choose])
+   
+   packages.sorted = sub('^\\.GlobalEnv$', '', packages.sorted)
+   
+   .rs.makeCompletions(
+      token = token,
+      results = results.sorted,
+      packages = packages.sorted
+   )
 })

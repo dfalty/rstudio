@@ -1,7 +1,7 @@
 /*
  * Source.java
  *
- * Copyright (C) 2009-16 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -86,7 +86,6 @@ import org.rstudio.studio.client.events.GetEditorContextEvent.DocumentSelection;
 import org.rstudio.studio.client.events.ReplaceRangesEvent;
 import org.rstudio.studio.client.events.ReplaceRangesEvent.ReplacementData;
 import org.rstudio.studio.client.events.SetSelectionRangesEvent;
-import org.rstudio.studio.client.rmarkdown.model.RMarkdownContext;
 import org.rstudio.studio.client.rmarkdown.model.RmdChosenTemplate;
 import org.rstudio.studio.client.rmarkdown.model.RmdFrontMatter;
 import org.rstudio.studio.client.rmarkdown.model.RmdOutputFormat;
@@ -124,6 +123,9 @@ import org.rstudio.studio.client.workbench.views.source.editors.EditingTarget;
 import org.rstudio.studio.client.workbench.views.source.editors.EditingTargetSource;
 import org.rstudio.studio.client.workbench.views.source.editors.codebrowser.CodeBrowserEditingTarget;
 import org.rstudio.studio.client.workbench.views.source.editors.data.DataEditingTarget;
+import org.rstudio.studio.client.workbench.views.source.editors.explorer.ObjectExplorerEditingTarget;
+import org.rstudio.studio.client.workbench.views.source.editors.explorer.events.OpenObjectExplorerEvent;
+import org.rstudio.studio.client.workbench.views.source.editors.explorer.model.ObjectExplorerHandle;
 import org.rstudio.studio.client.workbench.views.source.editors.profiler.OpenProfileEvent;
 import org.rstudio.studio.client.workbench.views.source.editors.profiler.model.ProfilerContents;
 import org.rstudio.studio.client.workbench.views.source.editors.text.AceEditor;
@@ -180,6 +182,7 @@ public class Source implements InsertSourceHandler,
                              PopoutDocInitiatedEvent.Handler,
                              DebugModeChangedEvent.Handler,
                              OpenProfileEvent.Handler,
+                             OpenObjectExplorerEvent.Handler,
                              ReplaceRangesEvent.Handler,
                              SetSelectionRangesEvent.Handler,
                              GetEditorContextEvent.Handler
@@ -391,6 +394,7 @@ public class Source implements InsertSourceHandler,
 
       events.addHandler(ShowContentEvent.TYPE, this);
       events.addHandler(ShowDataEvent.TYPE, this);
+      events.addHandler(OpenObjectExplorerEvent.TYPE, this);
 
       events.addHandler(ViewDataEvent.TYPE, new ViewDataHandler()
       {
@@ -450,6 +454,40 @@ public class Source implements InsertSourceHandler,
          public void onSourceFileSaved(SourceFileSavedEvent event)
          {
             pMruList_.get().add(event.getPath());
+         }
+      });
+      
+      events.addHandler(SourcePathChangedEvent.TYPE, 
+            new SourcePathChangedEvent.Handler()
+      {
+         
+         @Override
+         public void onSourcePathChanged(final SourcePathChangedEvent event)
+         {
+            
+            inEditorForPath(event.getFrom(), 
+                            new OperationWithInput<EditingTarget>()
+            {
+               @Override
+               public void execute(EditingTarget input)
+               {
+                  FileSystemItem toPath = 
+                        FileSystemItem.createFile(event.getTo());
+                  if (input instanceof TextEditingTarget)
+                  {
+                     // for text files, notify the editing surface so it can
+                     // react to the new file type
+                     ((TextEditingTarget)input).setPath(toPath);
+                  }
+                  else
+                  {
+                     // for other files, just rename the tab
+                     input.getName().setValue(toPath.getName(), true);
+                  }
+                  events_.fireEvent(new SourceFileSavedEvent(
+                        input.getId(), event.getTo()));
+               }
+            });
          }
       });
             
@@ -821,32 +859,23 @@ public class Source implements InsertSourceHandler,
              (SourceWindowManager.isMainSourceWindow() && 
               !windowManager_.isSourceWindowOpen(docWindowId)))
          {
-            final EditingTarget editor = addTab(doc, true, OPEN_REPLAY);
-            
-            // if this is a source window, check to see if it was opened to
-            // pop out a particular doc, and restore that doc's position if so
-            if (!SourceWindowManager.isMainSourceWindow())
+            // attempt to add a tab for the current doc; try/catch this since
+            // we don't want to allow one failure to prevent all docs from
+            // opening
+            EditingTarget sourceEditor = null;
+            try
             {
-               final SourceWindow sourceWindow = 
-                     RStudioGinjector.INSTANCE.getSourceWindow();
-               if (sourceWindow.getInitialDocId() == doc.getId() &&
-                   sourceWindow.getInitialSourcePosition() != null)
-               {
-                  // restore position deferred; restoring it immediately after
-                  // instantiating the editor causes inaccurate scroll position
-                  // reads elsewhere
-                  Scheduler.get().scheduleDeferred(new Scheduler.ScheduledCommand()
-                  {
-                     @Override
-                     public void execute()
-                     {
-                        editor.restorePosition(
-                              sourceWindow.getInitialSourcePosition());
-                        editor.ensureCursorVisible();
-                     }
-                  });
-               }
+               sourceEditor = addTab(doc, true, OPEN_REPLAY);
             }
+            catch (Exception e)
+            {
+               Debug.logException(e);
+            }
+            
+            // if we couldn't add the tab for this doc, just continue to the
+            // next one
+            if (sourceEditor == null)
+               continue;
          }
       }
    }
@@ -956,7 +985,45 @@ public class Source implements InsertSourceHandler,
                }
             });
    }
+   
+   @Override
+   public void onOpenObjectExplorerEvent(OpenObjectExplorerEvent event)
+   {
+      // ignore if we're a satellite
+      if (!SourceWindowManager.isMainSourceWindow())
+         return;
+    
+      ObjectExplorerHandle handle = event.getHandle();
+      
+      // attempt to open pre-existing tab
+      for (int i = 0; i < editors_.size(); i++)
+      {
+         String path = editors_.get(i).getPath();
+         if (path != null && path.equals(handle.getPath()))
+         {
+            ((ObjectExplorerEditingTarget)editors_.get(i)).update(handle);
+            ensureVisible(false);
+            view_.selectTab(i);
+            return;
+         }
+      }
 
+      ensureVisible(true);
+      server_.newDocument(
+            FileTypeRegistry.OBJECT_EXPLORER.getTypeId(),
+            null,
+            (JsObject) handle.cast(),
+            new SimpleRequestCallback<SourceDocument>("Show Object Explorer")
+            {
+               @Override
+               public void onResponseReceived(SourceDocument response)
+               {
+                  addTab(response, OPEN_INTERACTIVE);
+               }
+            });
+   }
+
+   @Override
    public void onShowData(ShowDataEvent event)
    {
       // ignore if we're a satellite
@@ -1426,45 +1493,30 @@ public class Source implements InsertSourceHandler,
    
    private void newRMarkdownV2Doc()
    {
-      rmarkdown_.withRMarkdownPackage(
-         "Creating R Markdown documents",
-         false,
-         new CommandWithArg<RMarkdownContext>(){
-
+      rmarkdown_.showNewRMarkdownDialog(
+         new OperationWithInput<NewRMarkdownDialog.Result>()
+         {
             @Override
-            public void execute(RMarkdownContext context)
+            public void execute(final NewRMarkdownDialog.Result result)
             {
-               new NewRMarkdownDialog(
-                  context,
-                  workbenchContext_,
-                  uiPrefs_.documentAuthor().getGlobalValue(),
-                  new OperationWithInput<NewRMarkdownDialog.Result>()
+               if (result.isNewDocument())
+               {
+                  NewRMarkdownDialog.RmdNewDocument doc = 
+                        result.getNewDocument();
+                  String author = doc.getAuthor();
+                  if (author.length() > 0)
                   {
-                     @Override
-                     public void execute(final NewRMarkdownDialog.Result result)
-                     {
-                        if (result.isNewDocument())
-                        {
-                           NewRMarkdownDialog.RmdNewDocument doc = 
-                                 result.getNewDocument();
-                           String author = doc.getAuthor();
-                           if (author.length() > 0)
-                           {
-                              uiPrefs_.documentAuthor().setGlobalValue(author);
-                              uiPrefs_.writeUIPrefs();
-                           }
-                           newRMarkdownV2Doc(doc);
-                        }
-                        else
-                        {
-                           newDocFromRmdTemplate(result);
-                        }
-                     }
+                     uiPrefs_.documentAuthor().setGlobalValue(author);
+                     uiPrefs_.writeUIPrefs();
                   }
-               ).showModal();
+                  newRMarkdownV2Doc(doc);
+               }
+               else
+               {
+                  newDocFromRmdTemplate(result);
+               }
             }
-         }
-      );
+         });
    }
    
    private void newDocFromRmdTemplate(final NewRMarkdownDialog.Result result)
@@ -1746,13 +1798,13 @@ public class Source implements InsertSourceHandler,
    @Handler
    public void onPreviousTab()
    {
-      switchToTab(-1, false);
+      switchToTab(-1, uiPrefs_.wrapTabNavigation().getValue());
    }
 
    @Handler
    public void onNextTab()
    {
-      switchToTab(1, false);
+      switchToTab(1, uiPrefs_.wrapTabNavigation().getValue());
    }
 
    @Handler
@@ -1876,21 +1928,11 @@ public class Source implements InsertSourceHandler,
             {
                final EditingTarget target = addTab(doc, e.getPos());
                
-               // restore position deferred; restoring it immediately after
-               // instantiating the editor causes inaccurate scroll position
-               // reads elsewhere
                Scheduler.get().scheduleDeferred(new Scheduler.ScheduledCommand()
                {
                   @Override
                   public void execute()
                   {
-                     // if we know the source position, restore it
-                     if (e.getParams() != null &&
-                         e.getParams().getSourcePosition() != null)
-                     {
-                        target.restorePosition(e.getParams().getSourcePosition());
-                        target.ensureCursorVisible();
-                     }
                      // if there was a collab session, resume it
                      if (collabParams != null)
                         target.beginCollabSession(e.getCollabParams());
@@ -1966,6 +2008,7 @@ public class Source implements InsertSourceHandler,
                   @Override
                   public void execute()
                   {
+                     textEditor.syncLocalSourceDb();
                      events_.fireEvent(new PopoutDocEvent(event, 
                            textEditor.currentPosition()));
                   }
@@ -3711,7 +3754,10 @@ public class Source implements InsertSourceHandler,
 
    public void onFileEdit(FileEditEvent event)
    {
-      fileTypeRegistry_.editFile(event.getFile());
+      if (SourceWindowManager.isMainSourceWindow())
+      {
+         fileTypeRegistry_.editFile(event.getFile());
+      }
    }
 
    public void onBeforeShow(BeforeShowEvent event)
@@ -3792,7 +3838,8 @@ public class Source implements InsertSourceHandler,
       
       // check for file path navigation
       else if ((navigation.getPath() != null) && 
-               !navigation.getPath().startsWith(DataItem.URI_PREFIX))
+               !navigation.getPath().startsWith(DataItem.URI_PREFIX) &&
+               !navigation.getPath().startsWith(ObjectExplorerHandle.URI_PREFIX))
       {
          FileSystemItem file = FileSystemItem.createFile(navigation.getPath());
          TextFileType fileType = fileTypeRegistry_.getTextTypeForFile(file);

@@ -34,6 +34,7 @@ import com.google.gwt.user.client.ui.Widget;
 import org.rstudio.core.client.StringUtil;
 import org.rstudio.core.client.command.ImageResourceProvider;
 import org.rstudio.core.client.command.SimpleImageResourceProvider;
+import org.rstudio.core.client.resources.ImageResource2x;
 import org.rstudio.core.client.theme.res.ThemeResources;
 import org.rstudio.core.client.theme.res.ThemeStyles;
 
@@ -93,7 +94,7 @@ public class ToolbarButton extends FocusWidget
    public ToolbarButton(ToolbarPopupMenu menu, boolean rightAlignMenu)
    {
       this((String)null, 
-           ThemeResources.INSTANCE.menuDownArrow(), 
+           new ImageResource2x(ThemeResources.INSTANCE.menuDownArrow2x()), 
            (ImageResource) null,
            (ClickHandler) null);
       
@@ -133,7 +134,7 @@ public class ToolbarButton extends FocusWidget
                         ToolbarPopupMenu menu,
                         boolean rightAlignMenu)
    {
-      this(text, leftImage, ThemeResources.INSTANCE.menuDownArrow(), null);
+      this(text, leftImage, new ImageResource2x(ThemeResources.INSTANCE.menuDownArrow2x()), null);
 
       addMenuHandlers(menu, rightAlignMenu);
       
@@ -234,10 +235,10 @@ public class ToolbarButton extends FocusWidget
            clickHandler);
    }
    
-   private ToolbarButton(String text, 
-                         ImageResourceProvider leftImage,
-                         ImageResource rightImage,
-                         ClickHandler clickHandler)
+   public ToolbarButton(String text,
+                        Image leftImage,
+                        ImageResource rightImage,
+                        ClickHandler clickHandler)
    {
       super();
 
@@ -248,14 +249,7 @@ public class ToolbarButton extends FocusWidget
 
       setText(text);
       setInfoText(null);
-      if (leftImage != null && 
-          leftImage.getImageResource() != null)
-      {
-         leftImageWidget_ = new Image(leftImage.getImageResource());
-         leftImage.addRenderedImage(leftImageWidget_);
-      }
-      else
-         leftImageWidget_ = new Image();
+      leftImageWidget_ = leftImage == null ? new Image() : leftImage;
       leftImageWidget_.setStylePrimaryName(styles_.toolbarButtonLeftImage());
       leftImageCell_.appendChild(leftImageWidget_.getElement());
       if (rightImage != null)
@@ -267,6 +261,24 @@ public class ToolbarButton extends FocusWidget
 
       if (clickHandler != null)
          addClickHandler(clickHandler);
+   }
+   
+   public ToolbarButton(String text, 
+                        ImageResourceProvider leftImage,
+                        ImageResource rightImage,
+                        ClickHandler clickHandler)
+   {
+      this(text, 
+           // extract the supplied left image 
+           leftImage != null && leftImage.getImageResource() != null ?
+               new Image(leftImage.getImageResource()) :
+               new Image(), 
+           rightImage, 
+           clickHandler);
+
+      // let the image provider know it has a rendered copy if we made one
+      if (leftImage != null && leftImageWidget_ != null)
+         leftImage.addRenderedImage(leftImageWidget_);
    }
 
    @Override

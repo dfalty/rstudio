@@ -20,6 +20,7 @@ import java.util.List;
 import org.rstudio.core.client.Debug;
 import org.rstudio.core.client.cellview.ImageButtonColumn;
 import org.rstudio.core.client.cellview.LinkColumn;
+import org.rstudio.core.client.resources.ImageResource2x;
 import org.rstudio.core.client.theme.res.ThemeResources;
 import org.rstudio.core.client.widget.OperationWithInput;
 import org.rstudio.core.client.widget.SearchWidget;
@@ -66,7 +67,6 @@ import com.google.gwt.user.cellview.client.TextHeader;
 import com.google.gwt.user.cellview.client.RowStyles;
 import com.google.gwt.user.client.Command;
 import com.google.gwt.user.client.Timer;
-import com.google.gwt.user.client.ui.AbstractImagePrototype;
 import com.google.gwt.user.client.ui.LayoutPanel;
 import com.google.gwt.user.client.ui.SuggestOracle;
 import com.google.gwt.user.client.ui.Widget;
@@ -322,6 +322,7 @@ public class PackagesPane extends WorkbenchPane implements Packages.Display
    {
       packagesDataProvider_ = new ListDataProvider<PackageInfo>();
       packagesTableContainer_ = new LayoutPanel();
+      packagesTableContainer_.addStyleName("ace_editor_theme");
       return packagesTableContainer_;
    }
    
@@ -420,7 +421,7 @@ public class PackagesPane extends WorkbenchPane implements Packages.Display
       
       ImageButtonColumn<PackageInfo> removeColumn = 
         new ImageButtonColumn<PackageInfo>(
-          AbstractImagePrototype.create(ThemeResources.INSTANCE.removePackage()),
+          new ImageResource2x(ThemeResources.INSTANCE.removePackage2x()),
           new OperationWithInput<PackageInfo>() {
             @Override
             public void execute(PackageInfo packageInfo)

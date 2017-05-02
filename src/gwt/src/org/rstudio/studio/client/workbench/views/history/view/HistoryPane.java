@@ -56,8 +56,11 @@ public class HistoryPane extends WorkbenchPane
       @Source("HistoryPane.css")
       Styles styles();
 
-      ImageResource searchResultsContextButton();
-      ImageResource searchResultsContextButton2();
+      @Source("searchResultsContextButton_2x.png")
+      ImageResource searchResultsContextButton2x();
+
+      @Source("searchResultsContextButton2_2x.png")
+      ImageResource searchResultsContextButton22x();
    }
 
    interface Styles extends CssResource
@@ -125,6 +128,8 @@ public class HistoryPane extends WorkbenchPane
    protected Widget createMainWidget()
    {
       mainPanel_ = new LayoutPanel();
+
+      mainPanel_.addStyleName("ace_editor");
 
       VerticalPanel vpanel = new VerticalPanel();
       vpanel.setSize("100%", "100%");

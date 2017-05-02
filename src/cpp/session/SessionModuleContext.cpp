@@ -148,6 +148,16 @@ SEXP rs_enqueClientEvent(SEXP nameSEXP, SEXP dataSEXP)
         type = session::client_events::kRprofCreated;
       else if (name == "editor_command")
          type = session::client_events::kEditorCommand;
+      else if (name == "navigate_shiny_frame")
+         type = session::client_events::kNavigateShinyFrame;
+      else if (name == "update_new_connection_dialog")
+         type = session::client_events::kUpdateNewConnectionDialog;
+      else if (name == "terminal_subprocs")
+         type = session::client_events::kTerminalSubprocs;
+      else if (name == "rstudioapi_show_dialog")
+         type = session::client_events::kRStudioAPIShowDialog;
+      else if (name == "object_explorer_event")
+         type = session::client_events::kObjectExplorerEvent;
 
       if (type != -1)
       {
@@ -365,6 +375,34 @@ SEXP rs_markdownToHTML(SEXP contentSEXP)
 
    r::sexp::Protect rProtect;
    return r::sexp::create(htmlContent, &rProtect);
+}
+
+inline std::string persistantValueName(SEXP nameSEXP)
+{
+   return "rstudioapi_persistent_values_" + r::sexp::safeAsString(nameSEXP);
+}
+
+SEXP rs_setPersistentValue(SEXP nameSEXP, SEXP valueSEXP)
+{
+   std::string name = persistantValueName(nameSEXP);
+   std::string value = r::sexp::safeAsString(valueSEXP);
+   persistentState().settings().set(name, value);
+   return R_NilValue;
+}
+
+SEXP rs_getPersistentValue(SEXP nameSEXP)
+{
+   std::string name = persistantValueName(nameSEXP);
+   if (persistentState().settings().contains(name))
+   {
+      std::string value = persistentState().settings().get(name);
+      r::sexp::Protect rProtect;
+      return r::sexp::create(value, &rProtect);
+   }
+   else
+   {
+      return R_NilValue;
+   }
 }
 
 } // anonymous namespace
@@ -692,6 +730,24 @@ bool isPackagePosixMakefile(const FilePath& srcPath)
            filename == "Makefile.in");
 }
 
+void performIdleOnlyAsyncRpcMethod(
+      const core::json::JsonRpcRequest& request,
+      const core::json::JsonRpcFunctionContinuation& continuation,
+      const core::json::JsonRpcAsyncFunction& function)
+{
+   if (request.isBackgroundConnection)
+   {
+      module_context::scheduleDelayedWork(
+          boost::posix_time::milliseconds(100),
+          boost::bind(function, request, continuation),
+          true);
+   }
+   else
+   {
+      function(request, continuation);
+   }
+}
+
 } // anonymous namespeace
 
 void scheduleDelayedWork(const boost::posix_time::time_duration& period,
@@ -722,6 +778,16 @@ void onBackgroundProcessing(bool isIdle)
    executeScheduledCommands(&s_scheduledCommands);
    if (isIdle)
       executeScheduledCommands(&s_idleScheduledCommands);
+}
+
+
+Error registerIdleOnlyAsyncRpcMethod(
+                             const std::string& name,
+                             const core::json::JsonRpcAsyncFunction& function)
+{
+   return registerAsyncRpcMethod(name,
+                                 boost::bind(performIdleOnlyAsyncRpcMethod,
+                                                _1, _2, function));
 }
 
 core::string_utils::LineEnding lineEndings(const core::FilePath& srcFile)
@@ -1047,7 +1113,7 @@ std::vector<FilePath> getLibPaths()
    if (error)
       LOG_ERROR(error);
 
-   std::vector<FilePath> libPaths(libPathsString.size());
+   std::vector<FilePath> libPaths;
    BOOST_FOREACH(const std::string& path, libPathsString)
    {
       libPaths.push_back(module_context::resolveAliasedPath(path));
@@ -1313,6 +1379,20 @@ SEXP rs_base64encode(SEXP dataSEXP, SEXP binarySEXP)
       return r::sexp::createRawVector(output, &protect);
    else
       return r::sexp::create(output, &protect);
+}
+
+SEXP rs_base64encodeFile(SEXP pathSEXP)
+{
+   std::string path = r::sexp::asString(pathSEXP); 
+   FilePath filePath = module_context::resolveAliasedPath(path);
+
+   std::string output;
+   Error error = base64::encode(filePath, &output);
+   if (error)
+      LOG_ERROR(error);
+
+   r::sexp::Protect protect;
+   return r::sexp::create(output, &protect);
 }
 
 SEXP rs_base64decode(SEXP dataSEXP, SEXP binarySEXP)
@@ -1775,7 +1855,7 @@ bool portmapPathForLocalhostUrl(const std::string& url, std::string* pPath)
    // extract the port
    boost::regex re("http[s]?://(?:localhost|127\\.0\\.0\\.1):([0-9]+)(/.*)?");
    boost::smatch match;
-   if (boost::regex_search(url, match, re))
+   if (regex_utils::search(url, match, re))
    {
       // calculate the path
       std::string path = match[2];
@@ -2299,6 +2379,10 @@ Error initialize()
    methodDef17.numArgs = 1;
    r::routines::addCallMethod(methodDef17);
    
+   // register persistent value functions
+   RS_REGISTER_CALL_METHOD(rs_setPersistentValue, 2);
+   RS_REGISTER_CALL_METHOD(rs_getPersistentValue, 1);
+
    // register rs_isRScriptInPackageBuildTarget
    r::routines::registerCallMethod(
             "rs_isRScriptInPackageBuildTarget",
@@ -2335,6 +2419,7 @@ Error initialize()
             0);
 
    RS_REGISTER_CALL_METHOD(rs_base64encode, 2);
+   RS_REGISTER_CALL_METHOD(rs_base64encodeFile, 1);
    RS_REGISTER_CALL_METHOD(rs_base64decode, 2);
 
    // initialize monitored scratch dir

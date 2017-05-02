@@ -40,8 +40,9 @@
 #include <r/RSexp.hpp>
 #include <r/RRoutines.hpp>
 
+#include <r/session/RSessionUtils.hpp>
+
 #include <boost/container/flat_set.hpp>
-#include <boost/timer/timer.hpp>
 #include <boost/bind.hpp>
 
 namespace rstudio {
@@ -101,6 +102,9 @@ bool isDataTableSingleBracketCall(RTokenCursor& cursor)
    
    if (objectString.find('(') != std::string::npos)
       return false;
+   
+   // avoid output leaking to console
+   r::session::utils::SuppressOutputInScope scope;
    
    // Get the object and check if it inherits from data.table
    SEXP objectSEXP;
@@ -234,6 +238,9 @@ SEXP resolveObjectAssociatedWithCall(RTokenCursor cursor,
       // Don't evaluate nested function calls.
       if (call.find('(') != std::string::npos)
          return R_UnboundValue;
+      
+      // avoid output leaking to console
+      r::session::utils::SuppressOutputInScope scope;
       
       Error error = r::exec::evaluateString(call, &symbolSEXP, pProtect);
       if (error)
@@ -1749,9 +1756,15 @@ bool skipFormulas(RTokenCursor& origin, ParseStatus& status)
       if (isLeftBracket(cursor))
          if (!cursor.fwdToMatchingToken())
             return false;
+      
+      // If the cursor is lying upon a right parenthesis, then implicitly
+      // pop that state (examine the parent state).
+      ParseStatus::ParseState state = cursor.isType(RToken::RPAREN)
+            ? status.peekState(1)
+            : status.peekState(0);
 
       // Check for end of statement
-      if (cursor.isAtEndOfStatement(status.isInParentheticalScope()))
+      if (cursor.isAtEndOfStatement(status.isInParentheticalScope(state)))
          break;
 
       // Expecting a symbol or right bracket
@@ -2005,6 +2018,7 @@ START:
       }
       
       DEBUG("Start: " << cursor);
+      
       // Move over unary operators -- any sequence is valid,
       // but certain tokens are not accepted following
       // unary operators.
@@ -2012,7 +2026,23 @@ START:
       while (isValidAsUnaryOperator(cursor))
       {
          startedWithUnaryOperator = true;
-         MOVE_TO_NEXT_SIGNIFICANT_TOKEN_WARN_ON_WHITESPACE(cursor, status);
+         
+         // Explicitly consume a '!!' or '!!!', to avoid warnings
+         // about whitespace used with unquote and unquote-splice
+         // operators.
+         if (cursor.contentEquals(L"!") &&
+             cursor.nextSignificantToken().contentEquals(L"!"))
+         {
+            do
+            {
+               MOVE_TO_NEXT_SIGNIFICANT_TOKEN(cursor, status);
+            }
+            while (cursor.contentEquals(L"!"));
+         }
+         else
+         {
+            MOVE_TO_NEXT_SIGNIFICANT_TOKEN_WARN_ON_WHITESPACE(cursor, status);
+         }
       }
       
       // Check for keywords.

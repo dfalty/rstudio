@@ -22,6 +22,7 @@ import com.google.gwt.resources.client.ImageResource;
 import com.google.gwt.safehtml.shared.SafeHtmlBuilder;
 import com.google.inject.Inject;
 
+import org.rstudio.core.client.resources.ImageResource2x;
 import org.rstudio.core.client.SafeHtmlUtil;
 import org.rstudio.core.client.StringUtil;
 import org.rstudio.core.client.js.JsUtil;
@@ -39,7 +40,7 @@ import org.rstudio.studio.client.workbench.prefs.model.UIPrefs;
 import org.rstudio.studio.client.workbench.snippets.SnippetHelper;
 import org.rstudio.studio.client.workbench.views.console.shell.assist.RCompletionManager.AutocompletionContext;
 import org.rstudio.studio.client.workbench.views.source.editors.text.AceEditor;
-import org.rstudio.studio.client.workbench.views.source.editors.text.NavigableSourceEditor;
+import org.rstudio.studio.client.workbench.views.source.editors.text.DocDisplay;
 import org.rstudio.studio.client.workbench.views.source.editors.text.RFunction;
 import org.rstudio.studio.client.workbench.views.source.editors.text.ScopeFunction;
 import org.rstudio.studio.client.workbench.views.source.editors.text.ace.CodeModel;
@@ -56,16 +57,13 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
-
 
 public class CompletionRequester
 {
    private CodeToolsServerOperations server_ ;
    private UIPrefs uiPrefs_;
-   private final NavigableSourceEditor editor_ ;
+   private final DocDisplay docDisplay_ ;
    private final SnippetHelper snippets_ ;
 
    private String cachedLinePrefix_ ;
@@ -74,11 +72,11 @@ public class CompletionRequester
    private RnwCompletionContext rnwContext_ ;
    
    public CompletionRequester(RnwCompletionContext rnwContext,
-                              NavigableSourceEditor editor,
+                              DocDisplay docDisplay,
                               SnippetHelper snippets)
    {
       rnwContext_ = rnwContext;
-      editor_ = editor;
+      docDisplay_ = docDisplay;
       snippets_ = snippets;
       RStudioGinjector.INSTANCE.injectMembers(this);
    }
@@ -321,11 +319,7 @@ public class CompletionRequester
    private static final Pattern RE_EXTRACTION = Pattern.create("[$@:]", "");
    private boolean isTopLevelCompletionRequest()
    {
-      AceEditor editor = (AceEditor) editor_;
-      if (editor == null)
-         return false;
-      
-      String line = editor.getCurrentLineUpToCursor();
+      String line = docDisplay_.getCurrentLineUpToCursor();
       return !RE_EXTRACTION.test(line);
    }
    
@@ -341,6 +335,7 @@ public class CompletionRequester
          final boolean chainExcludeArgsFromObject,
          final String filePath,
          final String documentId,
+         final String line,
          final boolean implicit,
          final ServerRequestCallback<CompletionResult> callback)
    {
@@ -362,6 +357,7 @@ public class CompletionRequester
             chainExcludeArgsFromObject,
             filePath,
             documentId,
+            line,
             new ServerRequestCallback<Completions>()
       {
          @Override
@@ -437,20 +433,35 @@ public class CompletionRequester
    {
       ArrayList<QualifiedName> result =
             new ArrayList<QualifiedName>();
+      result.addAll(completions);
       
-      Set<String> visitedItems = new HashSet<String>();
-      
-      for (int i = 0, n = completions.size(); i < n; i++)
+      // sort the results by name and type for efficient processing
+      Collections.sort(completions, new Comparator<QualifiedName>()
       {
-         QualifiedName name = completions.get(n - i - 1);
-         if (visitedItems.contains(name.name))
-            continue;
+         @Override
+         public int compare(QualifiedName o1, QualifiedName o2)
+         {
+            int name = o1.name.compareTo(o2.name);
+            if (name != 0)
+               return name;
+            return o1.type - o2.type;
+         }
+      });
+      
+      // walk backwards through the list and remove elements which have the 
+      // same name and type
+      for (int i = completions.size() - 1; i > 0; i--)
+      {
+         QualifiedName o1 = completions.get(i);
+         QualifiedName o2 = completions.get(i - 1);
          
-         result.add(name);
-         visitedItems.add(name.name);
+         // remove qualified names which have the same name and type (allow
+         // shadowing of contextual results to reduce confusion)
+         if (o1.name == o2.name && 
+             (o1.type == o2.type || o1.type == RCompletionType.CONTEXT))
+            result.remove(o1);
       }
       
-      Collections.reverse(result);
       return result;
    }
    
@@ -458,7 +469,7 @@ public class CompletionRequester
          String token,
          ArrayList<QualifiedName> completions)
    {
-      AceEditor editor = (AceEditor) editor_;
+      AceEditor editor = (AceEditor) docDisplay_;
 
       // NOTE: this will be null in the console, so protect against that
       if (editor != null)
@@ -514,7 +525,7 @@ public class CompletionRequester
          ArrayList<QualifiedName> completions,
          String type)
    {
-      AceEditor editor = (AceEditor) editor_;
+      AceEditor editor = (AceEditor) docDisplay_;
 
       // NOTE: this will be null in the console, so protect against that
       if (editor != null)
@@ -546,7 +557,7 @@ public class CompletionRequester
          String token,
          ArrayList<QualifiedName> completions)
    {
-      AceEditor editor = (AceEditor) editor_;
+      AceEditor editor = (AceEditor) docDisplay_;
 
       if (editor != null)
       {
@@ -625,6 +636,7 @@ public class CompletionRequester
          final boolean chainExcludeArgsFromObject,
          final String filePath,
          final String documentId,
+         final String line,
          final ServerRequestCallback<Completions> requestCallback)
    {
       int optionsStartOffset;
@@ -647,6 +659,7 @@ public class CompletionRequester
                chainExcludeArgsFromObject,
                filePath,
                documentId,
+               line,
                requestCallback);
       }
    }
@@ -869,49 +882,49 @@ public class CompletionRequester
       private ImageResource getIcon()
       {
          if (RCompletionType.isFunctionType(type))
-            return ICONS.function();
+            return new ImageResource2x(ICONS.function2x());
          
          switch(type)
          {
          case RCompletionType.UNKNOWN:
-            return ICONS.variable();
+            return new ImageResource2x(ICONS.variable2x());
          case RCompletionType.VECTOR:
-            return ICONS.variable();
+            return new ImageResource2x(ICONS.variable2x());
          case RCompletionType.ARGUMENT:
-            return ICONS.variable();
+            return new ImageResource2x(ICONS.variable2x());
          case RCompletionType.ARRAY:
          case RCompletionType.DATAFRAME:
-            return ICONS.dataFrame();
+            return new ImageResource2x(ICONS.dataFrame2x());
          case RCompletionType.LIST:
-            return ICONS.clazz();
+            return new ImageResource2x(ICONS.clazz2x());
          case RCompletionType.ENVIRONMENT:
-            return ICONS.environment();
+            return new ImageResource2x(ICONS.environment2x());
          case RCompletionType.S4_CLASS:
          case RCompletionType.S4_OBJECT:
          case RCompletionType.R5_CLASS:
          case RCompletionType.R5_OBJECT:
-            return ICONS.clazz();
+            return new ImageResource2x(ICONS.clazz2x());
          case RCompletionType.FILE:
             return getIconForFilename(name);
          case RCompletionType.DIRECTORY:
-            return ICONS.folder();
+            return new ImageResource2x(ICONS.folder2x());
          case RCompletionType.CHUNK:
          case RCompletionType.ROXYGEN:
-            return ICONS.keyword();
+            return new ImageResource2x(ICONS.keyword2x());
          case RCompletionType.HELP:
-            return ICONS.help();
+            return new ImageResource2x(ICONS.help2x());
          case RCompletionType.STRING:
-            return ICONS.variable();
+            return new ImageResource2x(ICONS.variable2x());
          case RCompletionType.PACKAGE:
-            return ICONS.rPackage();
+            return new ImageResource2x(ICONS.rPackage2x());
          case RCompletionType.KEYWORD:
-            return ICONS.keyword();
+            return new ImageResource2x(ICONS.keyword2x());
          case RCompletionType.CONTEXT:
-            return ICONS.context();
+            return new ImageResource2x(ICONS.context2x());
          case RCompletionType.SNIPPET:
-            return ICONS.snippet();
+            return new ImageResource2x(ICONS.snippet2x());
          default:
-            return ICONS.variable();
+            return new ImageResource2x(ICONS.variable2x());
          }
       }
       

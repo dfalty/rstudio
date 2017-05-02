@@ -18,6 +18,7 @@ import java.util.ArrayList;
 
 import org.rstudio.core.client.StringUtil;
 import org.rstudio.core.client.cellview.ImageButtonColumn;
+import org.rstudio.core.client.resources.ImageResource2x;
 import org.rstudio.core.client.theme.res.ThemeResources;
 import org.rstudio.core.client.widget.MessageDialog;
 import org.rstudio.core.client.widget.Operation;
@@ -30,7 +31,6 @@ import com.google.gwt.core.client.JsArray;
 import com.google.gwt.dom.client.Style.Unit;
 import com.google.gwt.user.cellview.client.CellTable;
 import com.google.gwt.user.cellview.client.TextColumn;
-import com.google.gwt.user.client.ui.AbstractImagePrototype;
 
 public class CheckForUpdatesDialog extends PackageActionConfirmationDialog<PackageUpdate>
 {
@@ -84,7 +84,7 @@ public class CheckForUpdatesDialog extends PackageActionConfirmationDialog<Packa
      
      ImageButtonColumn<PendingAction> newsColumn = 
         new ImageButtonColumn<PendingAction>(
-          AbstractImagePrototype.create(ThemeResources.INSTANCE.newsButton()),
+          new ImageResource2x(ThemeResources.INSTANCE.newsButton2x()),
           new OperationWithInput<PendingAction>() {
             public void execute(PendingAction action)
             {

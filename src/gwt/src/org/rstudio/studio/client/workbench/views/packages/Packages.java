@@ -1282,7 +1282,7 @@ public class Packages
       for (int i = 0; i < actions.length(); i++)
          pkgNames.add(actions.get(i).getPackage());
    }
-      
+   
    private final Display view_;
    private final PackagesServerOperations server_;
    private final PackratServerOperations packratServer_;

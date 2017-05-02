@@ -51,7 +51,7 @@ std::string asFormInput(const boost::cmatch& match,
    boost::smatch m;
    std::string itemText = match[1];
    boost::regex re("\\[(.*?)\\]");
-   if (boost::regex_search(itemText, m, re))
+   if (regex_utils::search(itemText, m, re))
    {
       // trim the content
       feedback = m[1];
@@ -156,6 +156,6 @@ void renderQuiz(int slideIndex, std::string* pHead, std::string* pHTML)
 
 } // namespace presentation
 } // namespace modules
-} // namesapce session
+} // namespace session
 } // namespace rstudio
 

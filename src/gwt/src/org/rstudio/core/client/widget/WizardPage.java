@@ -16,6 +16,8 @@ package org.rstudio.core.client.widget;
 
 import java.util.ArrayList;
 
+import org.rstudio.studio.client.common.HelpLink;
+
 import com.google.gwt.dom.client.Style.Unit;
 import com.google.gwt.resources.client.ImageResource;
 import com.google.gwt.user.client.ui.Composite;
@@ -54,8 +56,6 @@ public abstract class WizardPage<I,T> extends Composite
       }
       else
       {
-         WizardResources.Styles styles = WizardResources.INSTANCE.styles();
-         
          LayoutPanel layoutPanel = new LayoutPanel();
          
          if (largeImage_ != null)
@@ -83,8 +83,14 @@ public abstract class WizardPage<I,T> extends Composite
          
          
          initWidget(layoutPanel);
-         addStyleName(styles.wizardPageBackground());  
+         addStyleName(getWizardPageBackgroundStyle());  
       }
+   }
+
+   protected String getWizardPageBackgroundStyle()
+   {
+      WizardResources.Styles styles = WizardResources.INSTANCE.styles();
+      return styles.wizardPageBackground();
    }
    
    public String getTitle()
@@ -124,9 +130,24 @@ public abstract class WizardPage<I,T> extends Composite
    public void onActivate(ProgressIndicator indicator)
    {
    }
+
+   public void onBeforeActivate(Operation operation, ModalDialogBase wizard)
+   {
+      operation.execute();
+   }
+
+   public void onDeactivate(Operation operation)
+   {
+      operation.execute();
+   }
    
    public void onWizardClosing()
    {
+   }
+
+   public HelpLink getHelpLink()
+   {
+      return null;
    }
    
    abstract protected Widget createWidget();

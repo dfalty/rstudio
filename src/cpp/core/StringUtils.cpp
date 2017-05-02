@@ -1,7 +1,7 @@
 /*
  * StringUtils.cpp
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -15,10 +15,10 @@
 
 #include <core/StringUtils.hpp>
 
+#include <algorithm>
 #include <map>
 #include <ostream>
 
-#include <algorithm>
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -313,6 +313,13 @@ std::string systemToUtf8(const std::string& str)
    return systemToUtf8(str, CP_ACP);
 }
 
+std::string toUpper(const std::string& str)
+{
+   std::string upper = str;
+   std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+   return upper;
+}
+
 std::string toLower(const std::string& str)
 {
    std::string lower = str;
@@ -517,8 +524,9 @@ bool parseVersion(const std::string& str, uint64_t* pVersion)
    return true;
 }
 
-void trimLeadingLines(int maxLines, std::string* pLines)
+bool trimLeadingLines(int maxLines, std::string* pLines)
 {
+   bool didTrim = false;
    if (pLines->length() > static_cast<unsigned int>(maxLines*2))
    {
       int lineCount = 0;
@@ -531,11 +539,13 @@ void trimLeadingLines(int maxLines, std::string* pLines)
             if (++lineCount > maxLines)
             {
                pLines->erase(pLines->begin(), pos);
+               didTrim = true;
                break;
             }
          }
       }
    }
+   return didTrim;
 }
 
 std::string strippedOfBackQuotes(const std::string& string)

@@ -32,6 +32,9 @@ Vagrant.configure(2) do |config|
       vb.memory = "4096"
       vb.cpus = "4"
     end
+
+    config.vm.synced_folder ".", "/rstudio"
+    config.vm.synced_folder ".", "/home/vagrant/rstudio"
   end
 
   # define secondary box for development of load balanced features. if you want
@@ -49,9 +52,12 @@ Vagrant.configure(2) do |config|
       vb.memory = "2048"
       vb.cpus = "2"
     end
+
+    config.vm.synced_folder ".", "/rstudio"
+    config.vm.synced_folder ".", "/home/vagrant/rstudio"
   end
 
-  # define NFS box; can be used with or without the load balancer.
+  # define NFSv3 box; can be used with or without the load balancer.
   config.vm.define "nfs", autostart: false do |n|
     n.vm.box = "ubuntu/trusty64"
     n.vm.network "private_network", ip: "192.168.55.103"
@@ -62,6 +68,31 @@ Vagrant.configure(2) do |config|
       vb.memory = "1024"
       vb.cpus = "1"
     end
+
+    config.vm.synced_folder ".", "/rstudio"
+    config.vm.synced_folder ".", "/home/vagrant/rstudio"
+  end
+
+  # define NFSv4 box; mutually exclusive with the NFSv3 box (pick one). note
+  # that for reasons too complicated to enumerate here, the NFSv4 client 
+  # configuration cannot be performed automatically, so you'll need to
+  # manually run the provision-nfs4-client.sh script on the client machine(s) 
+  config.vm.define "nfs4", autostart: false do |n|
+    n.vm.box = "bento/freebsd-10.3"
+    n.vm.network "private_network", ip: "192.168.55.103"
+    n.ssh.shell = "sh"
+
+    config.vm.provider :virtualbox do |vb|
+      vb.customize ["modifyvm", :id, "--memory", "512"]
+      vb.customize ["modifyvm", :id, "--cpus", "1"]
+      vb.customize ["modifyvm", :id, "--hwvirtex", "on"]
+      vb.customize ["modifyvm", :id, "--audio", "none"]
+      vb.customize ["modifyvm", :id, "--nictype1", "virtio"]
+      vb.customize ["modifyvm", :id, "--nictype2", "virtio"]
+    end
+
+    # connect to private network and provision
+    n.vm.provision :shell, path: "vagrant/provision-nfs4.sh"
   end
 
   # define an LDAP box; can be used with or without the load balancer, but 
@@ -75,6 +106,9 @@ Vagrant.configure(2) do |config|
       vb.memory = "1024"
       vb.cpus = "1"
     end
+
+    config.vm.synced_folder ".", "/rstudio"
+    config.vm.synced_folder ".", "/home/vagrant/rstudio"
   end
 
   # define CentOS development box -- similar to primary box, but currently only
@@ -88,6 +122,28 @@ Vagrant.configure(2) do |config|
       vb.memory = "2048"
       vb.cpus = "2"
     end
+
+    config.vm.synced_folder ".", "/rstudio"
+    config.vm.synced_folder ".", "/home/vagrant/rstudio"
+  end
+
+  # define license server box -- supplies floating licenses. will autoconfigure
+  # the primary box if it's up and running; otherwise, run
+  # provision-license-client.sh on servers to connect them
+  config.vm.define "license-server", autostart: false do |v|
+    v.vm.box = "minimal/trusty64"
+    v.vm.network "private_network", ip: "192.168.55.105"
+    v.vm.provision :shell, path: "vagrant/provision-license-server.sh"
+
+    # modest resources; this box only needs to deliver licenses
+    v.vm.provider "virtualbox" do |vb|
+      vb.customize ["modifyvm", :id, "--usb", "off"]
+      vb.memory = "512"
+      vb.cpus = "1"
+    end
+
+    config.vm.synced_folder ".", "/rstudio"
+    config.vm.synced_folder ".", "/home/vagrant/rstudio"
   end
 
   # less generous resources (and a box that supports hyperv) on hyper-v
@@ -96,7 +152,4 @@ Vagrant.configure(2) do |config|
     hv.memory = "1024"
     hv.cpus = "2"
   end
-
-  config.vm.synced_folder ".", "/rstudio"
-  config.vm.synced_folder ".", "/home/vagrant/rstudio"
 end

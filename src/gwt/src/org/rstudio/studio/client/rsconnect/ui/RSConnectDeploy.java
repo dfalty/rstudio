@@ -21,6 +21,7 @@ import org.rstudio.core.client.Debug;
 import org.rstudio.core.client.JsArrayUtil;
 import org.rstudio.core.client.StringUtil;
 import org.rstudio.core.client.files.FileSystemItem;
+import org.rstudio.core.client.resources.ImageResource2x;
 import org.rstudio.core.client.widget.Operation;
 import org.rstudio.core.client.widget.OperationWithInput;
 import org.rstudio.core.client.widget.ProgressIndicator;
@@ -63,7 +64,6 @@ import com.google.gwt.uibinder.client.UiBinder;
 import com.google.gwt.uibinder.client.UiField;
 import com.google.gwt.user.client.Command;
 import com.google.gwt.user.client.ui.Anchor;
-import com.google.gwt.user.client.ui.CheckBox;
 import com.google.gwt.user.client.ui.Composite;
 import com.google.gwt.user.client.ui.Grid;
 import com.google.gwt.user.client.ui.HTMLPanel;
@@ -110,12 +110,21 @@ public class RSConnectDeploy extends Composite
    }
    
    public interface DeployResources extends ClientBundle
-   {  
-      ImageResource publishShinyIllustration();
-      ImageResource publishRmdIllustration();
-      ImageResource publishPlotIllustration();
-      ImageResource publishPresentationIllustration();
-      ImageResource publishHTMLIllustration();
+   {
+      @Source("publishShinyIllustration_2x.png")
+      ImageResource publishShinyIllustration2x();
+
+      @Source("publishRmdIllustration_2x.png")
+      ImageResource publishRmdIllustration2x();
+
+      @Source("publishPlotIllustration_2x.png")
+      ImageResource publishPlotIllustration2x();
+
+      @Source("publishPresentationIllustration_2x.png")
+      ImageResource publishPresentationIllustration2x();
+
+      @Source("publishHTMLIllustration_2x.png")
+      ImageResource publishHTMLIllustration2x();
 
       @Source("RSConnectDeploy.css")
       DeployStyle style();
@@ -486,23 +495,26 @@ public class RSConnectDeploy extends Composite
          return;
       }
       
-      // no need to validate names for updates
       if (isUpdate())
       {
+         // no need to validate names for updates
          onComplete.execute(true);
       }
-      
-      checkForExistingApp(getSelectedAccount(), appName_.getName(), 
-            new OperationWithInput<Boolean>()
-            {
-               @Override
-               public void execute(Boolean valid)
+      else
+      {
+         // see if there's an app with this name before running the deploy
+         checkForExistingApp(getSelectedAccount(), appName_.getName(), 
+               new OperationWithInput<Boolean>()
                {
-                  onComplete.execute(valid);
-                  if (!valid)
-                     focus();
-               }
-            });
+                  @Override
+                  public void execute(Boolean valid)
+                  {
+                     onComplete.execute(valid);
+                     if (!valid)
+                        focus();
+                  }
+               });
+      }
    }
    
    public void setUnsanitizedAppName(String name)
@@ -554,7 +566,7 @@ public class RSConnectDeploy extends Composite
    private void setFileList(ArrayList<String> files,
          ArrayList<String> additionalFiles, ArrayList<String> ignoredFiles)
    {
-      fileChecks_ = new ArrayList<CheckBox>();
+      fileChecks_ = new ArrayList<DirEntryCheckBox>();
       
       // clear existing file list
       fileListPanel_.clear(); 
@@ -856,7 +868,7 @@ public class RSConnectDeploy extends Composite
 
    private void addFile(String path, boolean checked)
    {
-      CheckBox fileCheck = new CheckBox(path);
+      DirEntryCheckBox fileCheck = new DirEntryCheckBox(path);
       fileCheck.setValue(checked);
       fileListPanel_.add(fileCheck);
       fileChecks_.add(fileCheck);
@@ -871,7 +883,7 @@ public class RSConnectDeploy extends Composite
       {
          if (fileChecks_.get(i).getValue() == checked)
          {
-            files.add(fileChecks_.get(i).getText());
+            files.add(fileChecks_.get(i).getPath());
          }
       }
       return files;
@@ -932,8 +944,8 @@ public class RSConnectDeploy extends Composite
 
       for (int i = 0; i < fileChecks_.size(); i++)
       {
-         CheckBox fileCheck = fileChecks_.get(i);
-         if (fileCheck.getText().equals(path))
+         DirEntryCheckBox fileCheck = fileChecks_.get(i);
+         if (fileCheck.getPath().equals(path))
          {
             // don't allow the user to unselect the primary file
             fileCheck.setEnabled(false);
@@ -959,17 +971,17 @@ public class RSConnectDeploy extends Composite
              contentType_ == RSConnect.CONTENT_TYPE_HTML)
          {
             descriptionImage_.setResource(
-                  RSConnectResources.INSTANCE.previewPlot());
+                  new ImageResource2x(RSConnectResources.INSTANCE.previewPlot2x()));
          }
          else if (contentType_ == RSConnect.CONTENT_TYPE_PRES)
          {
             descriptionImage_.setResource(
-                  RSConnectResources.INSTANCE.previewPresentation());
+                  new ImageResource2x(RSConnectResources.INSTANCE.previewPresentation2x()));
          }
          else
          {
             descriptionImage_.setResource(
-                     RSConnectResources.INSTANCE.previewDoc());
+                  new ImageResource2x(RSConnectResources.INSTANCE.previewDoc2x()));
          }
       }
       
@@ -1005,15 +1017,15 @@ public class RSConnectDeploy extends Composite
       
       ImageResource illustration = null;
       if (contentType_ == RSConnect.CONTENT_TYPE_APP)
-         illustration = RESOURCES.publishShinyIllustration();
+         illustration = new ImageResource2x(RESOURCES.publishShinyIllustration2x());
       else if (contentType_ == RSConnect.CONTENT_TYPE_PLOT)
-         illustration = RESOURCES.publishPlotIllustration();
+         illustration = new ImageResource2x(RESOURCES.publishPlotIllustration2x());
       else if (contentType_ == RSConnect.CONTENT_TYPE_DOCUMENT)
-         illustration = RESOURCES.publishRmdIllustration();
+         illustration = new ImageResource2x(RESOURCES.publishRmdIllustration2x());
       else if (contentType_ == RSConnect.CONTENT_TYPE_HTML)
-         illustration = RESOURCES.publishHTMLIllustration();
+         illustration = new ImageResource2x(RESOURCES.publishHTMLIllustration2x());
       else if (contentType_ == RSConnect.CONTENT_TYPE_PRES)
-         illustration = RESOURCES.publishPresentationIllustration();
+         illustration = new ImageResource2x(RESOURCES.publishPresentationIllustration2x());
       if (illustration != null)
          deployIllustration_.setResource(illustration);
    }
@@ -1114,10 +1126,10 @@ public class RSConnectDeploy extends Composite
    private void checkUncheckAll()
    {
       allChecked_ = !allChecked_;
-      for (CheckBox box: fileChecks_)
+      for (DirEntryCheckBox box: fileChecks_)
       {
          // don't toggle state for disabled boxes, or common Shiny .R filenames
-         String file = box.getText().toLowerCase();
+         String file = box.getPath().toLowerCase();
          if (box.isEnabled() &&
              file != "ui.r" &&
              file != "server.r" &&
@@ -1156,7 +1168,7 @@ public class RSConnectDeploy extends Composite
    @UiField(provided=true) RSConnectAccountList accountList_;
    @UiField(provided=true) AppNameTextbox appName_;
    
-   private ArrayList<CheckBox> fileChecks_;
+   private ArrayList<DirEntryCheckBox> fileChecks_;
    private ArrayList<String> filesAddedManually_ = 
          new ArrayList<String>();
    

@@ -22,6 +22,7 @@ import com.google.gwt.user.client.Command;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 
+import org.rstudio.core.client.StringUtil;
 import org.rstudio.core.client.cellview.ColumnSortInfo;
 import org.rstudio.core.client.command.CommandBinder;
 import org.rstudio.core.client.command.Handler;
@@ -53,6 +54,7 @@ import org.rstudio.studio.client.workbench.views.files.model.DirectoryListing;
 import org.rstudio.studio.client.workbench.views.files.model.FileChange;
 import org.rstudio.studio.client.workbench.views.files.model.FilesServerOperations;
 import org.rstudio.studio.client.workbench.views.files.model.PendingFileUpload;
+import org.rstudio.studio.client.workbench.views.source.events.SourcePathChangedEvent;
 
 import java.util.ArrayList;
 
@@ -100,6 +102,12 @@ public class Files
             String title,
             RemoteFileSystemContext context,
             FileSystemItem initialDir,
+            ProgressOperationWithInput<FileSystemItem> operation);
+      
+      void showFilePicker(
+            String title,
+            RemoteFileSystemContext context,
+            FileSystemItem initialFile,
             ProgressOperationWithInput<FileSystemItem> operation);
       
       void showFileUpload(
@@ -351,6 +359,55 @@ public class Files
                                     }});
    }
    
+   @Handler
+   void onCopyFileTo()
+   {
+      final ArrayList<FileSystemItem> selectedFiles = view_.getSelectedFiles();
+      
+      // validate selection size
+      if (selectedFiles.size() == 0)
+         return;
+
+      if (selectedFiles.size() > 1)
+      {
+         globalDisplay_.showErrorMessage(
+                           "Multiple Items Selected", 
+                           "Please select a single file or folder to copy");
+         return;
+      }
+
+      view_.showFilePicker(
+                        "Choose Destination", 
+                        fileSystemContext_,
+                        currentPath_,
+                        new ProgressOperationWithInput<FileSystemItem>() {
+
+         public void execute(FileSystemItem targetFile,
+                             final ProgressIndicator progress)
+         {
+            if (targetFile == null)
+               return;
+            
+            if (StringUtil.isNullOrEmpty(targetFile.getExtension()))
+            {
+               targetFile = FileSystemItem.createFile(
+                     targetFile.getPath() + selectedFiles.get(0).getExtension());
+            }
+            
+            server_.copyFile(selectedFiles.get(0),
+                 targetFile,
+                 false,
+                 new VoidServerRequestCallback(progress) {
+                     @Override
+                     protected void onSuccess()
+                     {
+                        view_.selectNone();
+                     }
+                  });
+         }
+      });
+   }
+   
    
    @Handler
    void onMoveFiles()
@@ -454,11 +511,10 @@ public class Files
             progress.onProgress("Renaming file...");
 
             String path = file.getParentPath().completePath(input);
-            FileSystemItem target ;
-            if (file.isDirectory())
-               target = FileSystemItem.createDir(path);
-            else
-               target = FileSystemItem.createFile(path);
+            final FileSystemItem target =
+               file.isDirectory() ?
+                  FileSystemItem.createDir(path) :
+                  FileSystemItem.createFile(path);
               
             // clear selection
             view_.selectNone();
@@ -471,6 +527,18 @@ public class Files
             server_.renameFile(file, 
                                target, 
                                new VoidServerRequestCallback(progress) {
+                                 @Override
+                                 protected void onSuccess()
+                                 {
+                                    // if we were successful, let editor know
+                                    if (!file.isDirectory())
+                                    {
+                                       eventBus_.fireEvent(
+                                             new SourcePathChangedEvent(
+                                                   file.getPath(), 
+                                                   target.getPath()));
+                                    }
+                                 }
                                  @Override
                                  protected void onFailure()
                                  {

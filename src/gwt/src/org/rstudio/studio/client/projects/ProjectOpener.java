@@ -14,6 +14,8 @@
  */
 package org.rstudio.studio.client.projects;
 
+import org.rstudio.core.client.CommandWithArg;
+import org.rstudio.core.client.Debug;
 import org.rstudio.core.client.files.FileSystemContext;
 import org.rstudio.core.client.files.FileSystemItem;
 import org.rstudio.core.client.widget.ProgressIndicator;
@@ -24,12 +26,21 @@ import org.rstudio.studio.client.common.FileDialogs;
 import org.rstudio.studio.client.common.impl.WebFileDialogs;
 import org.rstudio.studio.client.projects.model.OpenProjectParams;
 import org.rstudio.studio.client.projects.model.ProjectsServerOperations;
+import org.rstudio.studio.client.server.ServerError;
+import org.rstudio.studio.client.server.ServerRequestCallback;
 
 public class ProjectOpener
 {
    public final static int PROJECT_TYPE_FILE   = 0;
    public final static int PROJECT_TYPE_SHARED = 1;
-
+   
+   private void initialize()
+   {
+      if (initialized_) return;
+      initialized_ = true;
+      server_ = RStudioGinjector.INSTANCE.getServer();
+   }
+   
    public void showOpenProjectDialog(
                   FileSystemContext fsContext,
                   ProjectsServerOperations server,
@@ -38,6 +49,8 @@ public class ProjectOpener
                   boolean showNewSession,
                   final ProgressOperationWithInput<OpenProjectParams> onCompleted)
    {
+      initialize();
+      
       // use the default dialog on desktop mode or single-session mode
       FileDialogs dialogs = RStudioGinjector.INSTANCE.getFileDialogs();
       if (Desktop.isDesktop() ||
@@ -49,14 +62,55 @@ public class ProjectOpener
             fsContext, 
             FileSystemItem.createDir(defaultLocation),
             "R Projects (*.Rproj)",
+            true,
             new ProgressOperationWithInput<FileSystemItem>()
             {
                @Override
                public void execute(FileSystemItem input,
-                     ProgressIndicator indicator)
+                                   final ProgressIndicator indicator)
                {
-                  onCompleted.execute(new OpenProjectParams(input, null, false), 
-                        indicator);
+                  final CommandWithArg<FileSystemItem> onProjectFileReady =
+                        new CommandWithArg<FileSystemItem>()
+                  {
+                     @Override
+                     public void execute(FileSystemItem item)
+                     {
+                        onCompleted.execute(
+                              new OpenProjectParams(item, null, false),
+                              indicator);
+                     }
+                  };
+                  
+                  // null return values here imply a cancellation
+                  if (input == null)
+                     return;
+                  
+                  if (input.isDirectory())
+                  {
+                     final String rprojPath = input.completePath(input.getName() + ".Rproj");
+                     final FileSystemItem rprojFile = FileSystemItem.createFile(rprojPath);
+                     server_.createProjectFile(
+                           rprojFile.getPath(),
+                           new ServerRequestCallback<Boolean>()
+                           {
+                              @Override
+                              public void onResponseReceived(Boolean success)
+                              {
+                                 onProjectFileReady.execute(rprojFile);
+                              }
+
+                              @Override
+                              public void onError(ServerError error)
+                              {
+                                 Debug.logError(error);
+                                 onProjectFileReady.execute(rprojFile);
+                              }
+                           });
+                  }
+                  else
+                  {
+                     onProjectFileReady.execute(input);
+                  }
                }
             });  
       }
@@ -69,4 +123,8 @@ public class ProjectOpener
                defaultType, showNewSession, onCompleted);
       }
    }
+   
+   // Injected ----
+   private boolean initialized_;
+   private ProjectsServerOperations server_;
 }

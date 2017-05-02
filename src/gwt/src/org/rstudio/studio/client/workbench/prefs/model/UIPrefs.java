@@ -1,7 +1,7 @@
 /*
  * UIPrefs.java
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -206,6 +206,11 @@ public class UIPrefs extends UIPrefsAccessor implements UiPrefsChangedHandler
          showSignatureTooltips().setGlobalValue(
                                  newUiPrefs.showSignatureTooltips().getGlobalValue());
          
+         terminalLocalEcho().setGlobalValue(
+                                 newUiPrefs.terminalLocalEcho().getGlobalValue());
+         
+         terminalUseWebsockets().setGlobalValue(
+                                 newUiPrefs.terminalUseWebsockets().getGlobalValue());
          
          /* Diagnostics */
          
@@ -287,6 +292,10 @@ public class UIPrefs extends UIPrefsAccessor implements UiPrefsChangedHandler
          // truncate long lines in console history
          truncateLongLinesInConsoleHistory().setGlobalValue(
                              newUiPrefs.truncateLongLinesInConsoleHistory().getGlobalValue());
+         
+         // console handling of ANSI escape codes
+         consoleAnsiMode().setGlobalValue(
+               newUiPrefs.consoleAnsiMode().getGlobalValue());
          
          // chunk toolbar
          showInlineToolbarForRCodeChunks().setGlobalValue(

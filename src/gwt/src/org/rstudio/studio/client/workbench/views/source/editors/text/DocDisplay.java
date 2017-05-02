@@ -183,6 +183,10 @@ public interface DocDisplay extends HasValueChangeHandlers<Void>,
    void setScrollPastEndOfDocument(boolean enable);
    void setHighlightRFunctionCalls(boolean highlight);
    
+   void setScrollLeft(int x);
+   void setScrollTop(int y);
+   void scrollTo(int x, int y);
+   
    void enableSearchHighlight();
    void disableSearchHighlight();
    
@@ -288,6 +292,9 @@ public interface DocDisplay extends HasValueChangeHandlers<Void>,
    void jumpToMatching();
    void selectToMatching();
    void expandToMatching();
+   
+   void addCursorAbove();
+   void addCursorBelow();
 
    HandlerRegistration addUndoRedoHandler(UndoRedoHandler handler);
    JavaScriptObject getCleanStateToken();
@@ -340,6 +347,7 @@ public interface DocDisplay extends HasValueChangeHandlers<Void>,
    int getEndOfCurrentStatement();
 
    Range getMultiLineExpr(Position pos, int startRow, int endRow);
+   Range getParagraph(Position pos, int startRow, int endRow);
    
    void highlightDebugLocation(
          SourcePosition startPos,
@@ -381,6 +389,8 @@ public interface DocDisplay extends HasValueChangeHandlers<Void>,
    void blockOutdent();
    void splitIntoLines();
    
+   int getFirstFullyVisibleRow();
+   
    Rectangle getPositionBounds(Position position);
    Rectangle getRangeBounds(Range range);
    
@@ -398,6 +408,7 @@ public interface DocDisplay extends HasValueChangeHandlers<Void>,
    
    void setDragEnabled(boolean enabled);
    
+   boolean isSnippetsTabStopManagerActive();
    boolean onInsertSnippet();
 
    void addLineWidget(LineWidget widget);

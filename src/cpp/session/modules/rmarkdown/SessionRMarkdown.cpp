@@ -1,7 +1,7 @@
 /*
  * SessionRMarkdown.cpp
  *
- * Copyright (C) 2009-16 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -235,14 +235,15 @@ public:
                                               bool asTempfile,
                                               bool asShiny,
                                               const std::string& existingOutputFile,
-                                              const std::string& workingDir)
+                                              const std::string& workingDir,
+                                              const std::string& viewerType)
    {
       boost::shared_ptr<RenderRmd> pRender(new RenderRmd(targetFile,
                                                          sourceLine,
                                                          sourceNavigation,
                                                          asShiny));
       pRender->start(format, encoding, paramsFile, asTempfile, 
-                     existingOutputFile, workingDir);
+                     existingOutputFile, workingDir, viewerType);
       return pRender;
    }
 
@@ -304,7 +305,8 @@ private:
               const std::string& paramsFile,
               bool asTempfile,
               const std::string& existingOutputFile,
-              const std::string& workingDir)
+              const std::string& workingDir,
+              const std::string& viewerType)
    {
       Error error;
       json::Object dataJson;
@@ -314,8 +316,9 @@ private:
       ClientEvent event(client_events::kRmdRenderStarted, dataJson);
       module_context::enqueClientEvent(event);
 
-      // save encoding
+      // save encoding and viewer type
       encoding_ = encoding;
+      viewerType_ = viewerType;
 
       std::string renderFunc;
       if (isShiny_)
@@ -417,7 +420,13 @@ private:
       allOutput_.clear();
       if (existingOutputFile.empty())
       {
-         async_r::AsyncRProcess::start(cmd.c_str(), environment, targetFile_.parent(),
+         // launch the R session in the document's directory by default, unless
+         // a working directory was supplied
+         FilePath working = targetFile_.parent();
+         if (!workingDir.empty())
+            working = module_context::resolveAliasedPath(workingDir);
+
+         async_r::AsyncRProcess::start(cmd.c_str(), environment, working,
                                        async_r::R_PROCESS_NO_RDATA);
       }
       else
@@ -468,7 +477,7 @@ private:
          {
             const boost::regex shinyListening("^Listening on (http.*)$");
             boost::smatch matches;
-            if (boost::regex_match(outputLine, matches, shinyListening))
+            if (regex_utils::match(outputLine, matches, shinyListening))
             {
                json::Object startedJson;
                startedJson["target_file"] =
@@ -586,7 +595,9 @@ private:
 
       resultJson["website_dir"] = websiteDir;
 
+      // view options
       resultJson["force_maximize"] = forceMaximize;
+      resultJson["viewer_type"] = viewerType_;
 
       // allow for format specific additions to the result json
       std::string formatName =  outputFormat_["format_name"].get_str();
@@ -630,7 +641,7 @@ private:
          const boost::regex knitrErr(
                   "^Quitting from lines (\\d+)-(\\d+) \\(([^)]+)\\)(.*)");
          boost::smatch matches;
-         if (boost::regex_match(output, matches, knitrErr))
+         if (regex_utils::match(output, matches, knitrErr))
          {
             // looks like a knitr error; compose a compile error object and
             // emit it to the client when the render is complete
@@ -657,6 +668,7 @@ private:
    int sourceLine_;
    FilePath outputFile_;
    std::string encoding_;
+   std::string viewerType_;
    bool sourceNavigation_;
    json::Object outputFormat_;
    std::vector<module_context::SourceMarker> knitrErrors_;
@@ -664,99 +676,6 @@ private:
 };
 
 boost::shared_ptr<RenderRmd> s_pCurrentRender_;
-
-// This class's job is to asynchronously read template locations from the R
-// Markdown package, and emit each template as a client event. This should
-// generally be fast (a few milliseconds); we use this asynchronous
-// implementation in case the file system is slow (e.g. slow or remote disk)
-// or there are many thousands of packages (e.g. all of CRAN).
-class DiscoverTemplates : public async_r::AsyncRProcess
-{
-public:
-   static boost::shared_ptr<DiscoverTemplates> create()
-   {
-      boost::shared_ptr<DiscoverTemplates> pDiscover(new DiscoverTemplates());
-      pDiscover->start("rmarkdown:::list_template_dirs()", FilePath(),
-                       async_r::R_PROCESS_VANILLA);
-      return pDiscover;
-   }
-
-private:
-   void onStdout(const std::string& output)
-   {
-      r::sexp::Protect protect;
-      Error error;
-
-      // the output vector may contain more than one path if paths are returned
-      // very quickly, so split it into lines and emit a client event for
-      // each line
-      std::vector<std::string> paths;
-      boost::algorithm::split(paths, output,
-                              boost::algorithm::is_any_of("\n\r"));
-      BOOST_FOREACH(std::string& path, paths)
-      {
-         if (path.empty())
-            continue;
-
-         // record the template's path (absolute for the filesystem)
-         json::Object dataJson;
-
-         std::string name;
-         std::string description;
-         std::string createDir = "default";
-         std::string package;
-
-         // if the template's owning package is known, emit that
-         size_t pipePos = path.find_first_of('|');
-         if (pipePos != std::string::npos)
-         {
-            package = path.substr(0, pipePos);
-
-            // remove package name from string, leaving just the path segment
-            path = path.substr(pipePos + 1, path.length() - pipePos);
-         }
-
-         SEXP templateDetails;
-         error = r::exec::RFunction(
-            ".rs.getTemplateDetails",string_utils::utf8ToSystem(path))
-            .call(&templateDetails, &protect);
-
-         // .rs.getTemplateDetails may return null if the template is not
-         // well-formed
-         if (error || TYPEOF(templateDetails) == NILSXP)
-            continue;
-
-         r::sexp::getNamedListElement(templateDetails,
-                                      "name", &name);
-         r::sexp::getNamedListElement(templateDetails,
-                                      "description", &description);
-
-         bool createDirFlag = false;
-         error = r::sexp::getNamedListElement(templateDetails,
-                                              "create_dir",
-                                              &createDirFlag);
-         createDir = createDirFlag ? "true" : "false";
-
-         dataJson["package_name"] = package;
-         dataJson["path"] = path;
-         dataJson["name"] = name;
-         dataJson["description"] = description;
-         dataJson["create_dir"] = createDir;
-
-         // emit to the client
-         ClientEvent event(client_events::kRmdTemplateDiscovered, dataJson);
-         module_context::enqueClientEvent(event);
-      }
-   }
-
-   void onCompleted(int exitStatus)
-   {
-      module_context::enqueClientEvent(
-               ClientEvent(client_events::kRmdTemplateDiscoveryCompleted));
-   }
-};
-
-boost::shared_ptr<DiscoverTemplates> s_pTemplateDiscovery_;
 
 // replaces references to MathJax with references to our built-in resource
 // handler.
@@ -909,6 +828,7 @@ void doRenderRmd(const std::string& file,
                  bool asShiny,
                  const std::string& existingOutputFile,
                  const std::string& workingDir,
+                 const std::string& viewerType,
                  json::JsonRpcResponse* pResponse)
 {
    if (s_pCurrentRender_ &&
@@ -928,7 +848,8 @@ void doRenderRmd(const std::string& file,
                asTempfile,
                asShiny,
                existingOutputFile,
-               workingDir);
+               workingDir,
+               viewerType);
       pResponse->setResult(true);
    }
 }
@@ -938,7 +859,7 @@ Error renderRmd(const json::JsonRpcRequest& request,
 {
    int line = -1, type = kRenderTypeStatic;
    std::string file, format, encoding, paramsFile, existingOutputFile,
-               workingDir;
+               workingDir, viewerType;
    bool asTempfile = false;
    Error error = json::readParams(request.params,
                                   &file,
@@ -949,7 +870,8 @@ Error renderRmd(const json::JsonRpcRequest& request,
                                   &asTempfile,
                                   &type,
                                   &existingOutputFile,
-                                  &workingDir);
+                                  &workingDir,
+                                  &viewerType);
    if (error)
       return error;
 
@@ -984,6 +906,7 @@ Error renderRmd(const json::JsonRpcRequest& request,
       resultJson["rpubs_published"] =
             !module_context::previousRpubsUploadId(outputFile).empty();
       resultJson["force_maximize"] = false;
+      resultJson["viewer_type"] = viewerType;
       ClientEvent event(client_events::kRmdRenderCompleted, resultJson);
       module_context::enqueClientEvent(event);
    }
@@ -992,7 +915,7 @@ Error renderRmd(const json::JsonRpcRequest& request,
       // not a notebook, do render work
       doRenderRmd(file, line, format, encoding, paramsFile,
                   true, asTempfile, type == kRenderTypeShiny, existingOutputFile, 
-                  workingDir, pResponse);
+                  workingDir, viewerType, pResponse);
    }
 
    return Success();
@@ -1013,7 +936,7 @@ Error renderRmdSource(const json::JsonRpcRequest& request,
       return error;
 
    doRenderRmd(rmdTempFile.absolutePath(), -1, "", "UTF-8", "",
-               false, false, false, "", "", pResponse);
+               false, false, false, "", "", "", pResponse);
 
    return Success();
 }
@@ -1125,23 +1048,6 @@ void handleRmdOutputRequest(const http::Request& request,
    }
 }
 
-
-Error discoverRmdTemplates(const json::JsonRpcRequest&,
-                           json::JsonRpcResponse* pResponse)
-{
-   if (s_pTemplateDiscovery_ &&
-       s_pTemplateDiscovery_->isRunning())
-   {
-      pResponse->setResult(false);
-   }
-   else
-   {
-      s_pTemplateDiscovery_ = DiscoverTemplates::create();
-      pResponse->setResult(true);
-   }
-
-   return Success();
-}
 
 Error createRmdFromTemplate(const json::JsonRpcRequest& request,
                             json::JsonRpcResponse* pResponse)
@@ -1428,7 +1334,6 @@ Error initialize()
       (bind(registerRpcMethod, "render_rmd", renderRmd))
       (bind(registerRpcMethod, "render_rmd_source", renderRmdSource))
       (bind(registerRpcMethod, "terminate_render_rmd", terminateRenderRmd))
-      (bind(registerRpcMethod, "discover_rmd_templates", discoverRmdTemplates))
       (bind(registerRpcMethod, "create_rmd_from_template", createRmdFromTemplate))
       (bind(registerRpcMethod, "get_rmd_template", getRmdTemplate))
       (bind(registerRpcMethod, "prepare_for_rmd_chunk_execution", prepareForRmdChunkExecution))

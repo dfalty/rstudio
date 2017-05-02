@@ -18,7 +18,6 @@ package org.rstudio.studio.client;
 import com.google.gwt.core.client.EntryPoint;
 import com.google.gwt.core.client.GWT;
 import com.google.gwt.core.client.RunAsyncCallback;
-import com.google.gwt.dom.client.Document;
 import com.google.gwt.dom.client.Element;
 import com.google.gwt.dom.client.Style;
 import com.google.gwt.dom.client.StyleInjector;
@@ -74,7 +73,10 @@ import org.rstudio.studio.client.workbench.exportplot.ExportPlotResources;
 import org.rstudio.studio.client.workbench.prefs.views.PreferencesDialog;
 import org.rstudio.studio.client.workbench.ui.unsaved.UnsavedChangesDialog;
 import org.rstudio.studio.client.workbench.views.buildtools.ui.BuildPaneResources;
-import org.rstudio.studio.client.workbench.views.connections.ui.NewSparkConnectionDialog;
+import org.rstudio.studio.client.workbench.views.connections.ui.NewConnectionShinyHost;
+import org.rstudio.studio.client.workbench.views.connections.ui.NewConnectionSnippetDialog;
+import org.rstudio.studio.client.workbench.views.connections.ui.NewConnectionSnippetHost;
+import org.rstudio.studio.client.workbench.views.connections.ui.NewConnectionWizard;
 import org.rstudio.studio.client.workbench.views.console.ConsoleResources;
 import org.rstudio.studio.client.workbench.views.files.ui.FilesListDataGridResources;
 import org.rstudio.studio.client.workbench.views.history.view.HistoryPane;
@@ -90,7 +92,7 @@ import org.rstudio.studio.client.workbench.views.source.editors.text.AceEditor;
 import org.rstudio.studio.client.workbench.views.source.editors.text.ChunkSatellite;
 import org.rstudio.studio.client.workbench.views.source.editors.text.cpp.CppCompletionResources;
 import org.rstudio.studio.client.workbench.views.source.editors.text.findreplace.FindReplaceBar;
-import org.rstudio.studio.client.workbench.views.terminal.XTermWidget;
+import org.rstudio.studio.client.workbench.views.terminal.xterm.XTermWidget;
 import org.rstudio.studio.client.workbench.views.vcs.common.ChangelistTable;
 import org.rstudio.studio.client.workbench.views.vcs.common.diff.LineTableView;
 import org.rstudio.studio.client.workbench.views.vcs.dialog.DiffFrame;
@@ -101,7 +103,6 @@ public class RStudio implements EntryPoint
    public void onModuleLoad() 
    {
       Debug.injectDebug();
-      Document.get().getBody().getStyle().setBackgroundColor("#e1e2e5");
       Command dismissProgressAnimation = showProgress();
       delayLoadApplication(dismissProgressAnimation);
    }
@@ -155,7 +156,7 @@ public class RStudio implements EntryPoint
    
    private void delayLoadApplication(final Command dismissProgressAnimation)
    {
-      GWT.runAsync(new RunAsyncCallback()
+      final RunAsyncCallback runCallback = new RunAsyncCallback()
       {
          public void onFailure(Throwable reason)
          {
@@ -229,7 +230,9 @@ public class RStudio implements EntryPoint
                }
             });
          }
-      });
+      };
+
+      GWT.runAsync(runCallback);
    }
    
    private void ensureStylesInjected()
@@ -289,7 +292,10 @@ public class RStudio implements EntryPoint
       LocalRepositoriesWidget.ensureStylesInjected();
       CppCompletionResources.INSTANCE.styles().ensureInjected();
       RSConnectDeploy.RESOURCES.style().ensureInjected();
-      NewSparkConnectionDialog.ensureStylesInjected();
+      NewConnectionShinyHost.ensureStylesInjected();
+      NewConnectionSnippetHost.ensureStylesInjected();
+      NewConnectionSnippetDialog.ensureStylesInjected();
+      NewConnectionWizard.ensureStylesInjected();
       
       StyleInjector.inject(
             "button::-moz-focus-inner {border:0}");

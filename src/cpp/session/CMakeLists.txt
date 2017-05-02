@@ -61,23 +61,36 @@ set (SESSION_SOURCE_FILES
    SessionClientEvent.cpp
    SessionClientEventQueue.cpp
    SessionClientEventService.cpp
+   SessionClientInit.cpp
+   SessionConsoleInput.cpp
    SessionConsoleProcess.cpp
+   SessionConsoleProcessInfo.cpp
+   SessionConsoleProcessPersist.cpp
+   SessionConsoleProcessSocket.cpp
    SessionContentUrls.cpp
-   SessionSSH.cpp
+   SessionDirs.cpp
+   SessionRpc.cpp
+   SessionHttpMethods.cpp
+   SessionInit.cpp
    SessionMain.cpp
    SessionMainOverlay.cpp
+   SessionMainProcess.cpp
    SessionModuleContext.cpp
    SessionOptions.cpp
    SessionOptionsOverlay.cpp
    SessionPersistentState.cpp
    SessionPostback.cpp
    SessionRUtil.cpp
+   SessionSSH.cpp
    SessionSourceDatabase.cpp
    SessionSourceDatabaseSupervisor.cpp
+   SessionSuspend.cpp
+   SessionUriHandlers.cpp
    SessionUserSettings.cpp
    SessionWorkerContext.cpp
    http/SessionHttpConnectionQueue.cpp
    http/SessionHttpConnectionUtils.cpp
+   modules/RStudioAPI.cpp
    modules/SessionAbout.cpp
    modules/SessionAgreement.cpp
    modules/SessionAskPass.cpp
@@ -101,14 +114,18 @@ set (SESSION_SOURCE_FILES
    modules/SessionHistory.cpp
    modules/SessionHistoryArchive.cpp
    modules/SessionHTMLPreview.cpp
+   modules/SessionLibPathsIndexer.cpp
    modules/SessionLimits.cpp
    modules/SessionLists.cpp
    modules/SessionMarkers.cpp
+   modules/SessionObjectExplorer.cpp
+   modules/SessionPackageProvidedExtension.cpp
    modules/SessionPackages.cpp
    modules/SessionPackrat.cpp
    modules/SessionPath.cpp
    modules/SessionPlots.cpp
    modules/SessionProfiler.cpp
+   modules/SessionProjectTemplate.cpp
    modules/SessionRAddins.cpp
    modules/SessionRCompletions.cpp
    modules/SessionRHooks.cpp
@@ -119,6 +136,7 @@ set (SESSION_SOURCE_FILES
    modules/SessionSnippets.cpp
    modules/SessionSource.cpp
    modules/SessionSpelling.cpp
+   modules/SessionTerminalShell.cpp
    modules/SessionSVN.cpp
    modules/SessionUpdates.cpp
    modules/SessionVCS.cpp
@@ -138,6 +156,7 @@ set (SESSION_SOURCE_FILES
    modules/connections/ActiveConnections.cpp
    modules/connections/Connection.cpp
    modules/connections/ConnectionHistory.cpp
+   modules/connections/ConnectionsIndexer.cpp
    modules/connections/SessionConnections.cpp
    modules/data/SessionData.cpp
    modules/data/DataViewer.cpp
@@ -179,6 +198,7 @@ set (SESSION_SOURCE_FILES
    modules/rmarkdown/NotebookQueueUnit.cpp
    modules/rmarkdown/NotebookWorkingDir.cpp
    modules/rmarkdown/RMarkdownPresentation.cpp
+   modules/rmarkdown/RMarkdownTemplates.cpp
    modules/shiny/SessionShiny.cpp
    modules/tex/SessionCompilePdf.cpp
    modules/tex/SessionCompilePdfSupervisor.cpp
@@ -294,6 +314,7 @@ include_directories(
    include
    ${LIBR_INCLUDE_DIRS}
    ${CORE_INCLUDE_DIRS}
+   ${EXT_SOURCE_DIR}
    ${MONITOR_SOURCE_DIR}/include
    ${R_SOURCE_DIR}/include
    ${CMAKE_CURRENT_BINARY_DIR}
@@ -314,7 +335,7 @@ if(WIN32)
 
    add_custom_command(
       OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/res.o"
-      COMMAND windres.exe
+      COMMAND "${WINDRES}"
          -I "."
          -i "rsession.rc"
          -o "${CMAKE_CURRENT_BINARY_DIR}/res.o"
@@ -426,6 +447,10 @@ if (NOT RSTUDIO_SESSION_WIN64)
    install(DIRECTORY "${RSTUDIO_DEPENDENCIES_DIR}/common/mathjax-26"
            DESTINATION "${RSTUDIO_INSTALL_SUPPORTING}/resources")
 
+   # icons for database connections
+   install(DIRECTORY "resources/connections"
+           DESTINATION ${RSTUDIO_INSTALL_SUPPORTING}/resources)
+
    # install pandoc
    if(RSTUDIO_PACKAGE_BUILD_SLES)
       # when producing a SUSE Linux Enterpise build, we want to install the 
@@ -482,6 +507,14 @@ if (NOT RSTUDIO_SESSION_WIN64)
    install(DIRECTORY "${RSTUDIO_DEPENDENCIES_DIR}/common/libclang/builtin-headers"
            DESTINATION "${RSTUDIO_INSTALL_SUPPORTING}/resources/libclang")
 
+   # install winpty on windows
+   if(WIN32)
+      install(PROGRAMS "${WINPTY_BINDIR_32}/winpty.dll"
+              DESTINATION "${RSTUDIO_INSTALL_BIN}")
+      install(PROGRAMS "${WINPTY_BINDIR_32}/winpty-agent.exe"
+              DESTINATION "${RSTUDIO_INSTALL_BIN}")
+   endif()
+
    # install 64 bit binaries if we are on win64
    if(WIN32)
       if(NOT ("$ENV{PROGRAMW6432}" STREQUAL ""))
@@ -489,6 +522,11 @@ if (NOT RSTUDIO_SESSION_WIN64)
          install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/x64"
                  USE_SOURCE_PERMISSIONS
                  DESTINATION  ${RSTUDIO_INSTALL_BIN})
+         install(PROGRAMS "${WINPTY_BINDIR_64}/winpty.dll"
+                 DESTINATION "${RSTUDIO_INSTALL_BIN}/x64")
+         install(PROGRAMS "${WINPTY_BINDIR_64}/winpty-agent.exe"
+                 DESTINATION "${RSTUDIO_INSTALL_BIN}/x64")
+
       endif()
    endif()
 
@@ -516,6 +554,7 @@ if (NOT RSTUDIO_SESSION_WIN64)
               DESTINATION ${RSTUDIO_INSTALL_BIN}/winutils/x64)
 
    endif()
+
 endif()
 
 # # install 64-bit gcc runtime for session win64

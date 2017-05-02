@@ -158,7 +158,9 @@ json::Array callFramesAsJson(LineDebugState* pLineDebugState)
       // debugging in the environment of the callee. note that there may be
       // multiple srcrefs on the stack for a given closure; in this case we
       // always want to take the first one as it's the most current/specific.
-      if (isValidSrcref(context->srcref()) && !context->nextcontext().isNull())
+      if (!r::context::isByteCodeContext(*context) &&
+          isValidSrcref(context->srcref()) &&
+          !context->nextcontext().isNull())
       {
          SEXP env = context->nextcontext().cloenv();
          if (envSrcrefCtx.find(env) == envSrcrefCtx.end())
@@ -514,7 +516,10 @@ json::Object commonEnvironmentStateData(
             inFunctionEnvironment = true;
          }
 
-         if (functionName != "eval")
+         // The eval and evalq functions receive special treatment since they
+         // evaluate code from elsewhere (they don't have meaningful bodies we
+         // can test here)
+         if (functionName != "eval" && functionName != "evalq")
          {
             // see if the function to be debugged is out of sync with its saved
             // sources (if available).
@@ -989,6 +994,6 @@ Error initialize()
    
 } // namespace environment
 } // namespace modules
-} // namesapce session
+} // namespace session
 } // namespace rstudio
 

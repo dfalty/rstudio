@@ -60,6 +60,9 @@ public abstract class
    public abstract AppCommand executeCurrentFunction();
    public abstract AppCommand executeCurrentSection();
    public abstract AppCommand executeLastCode();
+   public abstract AppCommand executeCurrentLine();
+   public abstract AppCommand executeCurrentStatement();
+   public abstract AppCommand executeCurrentParagraph();
    public abstract AppCommand insertChunk();
    public abstract AppCommand insertChunkR();
    public abstract AppCommand insertChunkBash();
@@ -86,12 +89,15 @@ public abstract class
    public abstract AppCommand markdownHelp();
    public abstract AppCommand openRStudioIDECheatSheet();
    public abstract AppCommand openDataVisualizationCheatSheet();
+   public abstract AppCommand openDataImportCheatSheet();
    public abstract AppCommand openPackageDevelopmentCheatSheet();
    public abstract AppCommand openDataWranglingCheatSheet();
+   public abstract AppCommand openDataTransformationCheatSheet();
    public abstract AppCommand openRMarkdownCheatSheet();
    public abstract AppCommand openRMarkdownReferenceGuide();
    public abstract AppCommand openShinyCheatSheet();
    public abstract AppCommand openRoxygenQuickReference();
+   public abstract AppCommand openSparklyrCheatSheet();
    public abstract AppCommand knitDocument();
    public abstract AppCommand previewHTML();
    public abstract AppCommand publishHTML();
@@ -122,6 +128,8 @@ public abstract class
    public abstract AppCommand jumpToMatching();
    public abstract AppCommand selectToMatching();
    public abstract AppCommand expandToMatching();
+   public abstract AppCommand addCursorAbove();
+   public abstract AppCommand addCursorBelow();
    public abstract AppCommand splitIntoLines();
    public abstract AppCommand toggleDocumentOutline();
    public abstract AppCommand expandSelection();
@@ -162,6 +170,7 @@ public abstract class
  
    // Projects
    public abstract AppCommand newProject();
+   public abstract AppCommand newProjectFromTemplate();
    public abstract AppCommand openProject();
    public abstract AppCommand openProjectInNewWindow();
    public abstract AppCommand shareProject();
@@ -195,12 +204,16 @@ public abstract class
    public abstract AppCommand restartRRunAllChunks();
    public abstract AppCommand terminateR();
    public abstract AppCommand activateConsole();
+   public abstract AppCommand activateConsolePane();
    public abstract AppCommand layoutZoomConsole();
+   public abstract AppCommand layoutZoomConsolePane();
+   public abstract AppCommand activateConsolePanePane();
 
    // Files
    public abstract AppCommand newFolder();
    public abstract AppCommand uploadFile();
    public abstract AppCommand copyFile();
+   public abstract AppCommand copyFileTo();
    public abstract AppCommand moveFiles();
    public abstract AppCommand exportFiles();
    public abstract AppCommand renameFile();
@@ -302,7 +315,9 @@ public abstract class
    public abstract AppCommand loadWorkspace();
    public abstract AppCommand importDatasetFromFile();
    public abstract AppCommand importDatasetFromURL();
-   public abstract AppCommand importDatasetFromCSV();
+   public abstract AppCommand importDatasetFromCsv();
+   public abstract AppCommand importDatasetFromCsvUsingReadr();
+   public abstract AppCommand importDatasetFromCsvUsingBase();
    public abstract AppCommand importDatasetFromSAV();
    public abstract AppCommand importDatasetFromSAS();
    public abstract AppCommand importDatasetFromStata();
@@ -370,17 +385,14 @@ public abstract class
    
    // Terminal
    public abstract AppCommand newTerminal();
+   public abstract AppCommand activateTerminal();
    public abstract AppCommand renameTerminal();
    public abstract AppCommand closeTerminal();
    public abstract AppCommand clearTerminalScrollbackBuffer();
-   // TODO (gary) placeholders for what will become a dynamically
-   // generated list of user-created terminal(s)
-   public abstract AppCommand terminalSession1();
-   public abstract AppCommand terminalSession2();
-   public abstract AppCommand terminalSession3();
-   public abstract AppCommand terminalSession4();
-   public abstract AppCommand terminalSession5();
-   
+   public abstract AppCommand previousTerminal();
+   public abstract AppCommand nextTerminal();
+   public abstract AppCommand showTerminalInfo();
+    
    // Help
    public abstract AppCommand helpBack();
    public abstract AppCommand helpForward();
@@ -452,9 +464,6 @@ public abstract class
    public abstract AppCommand removeConnection();
    public abstract AppCommand disconnectConnection();
    public abstract AppCommand refreshConnection();
-   public abstract AppCommand sparkLog();
-   public abstract AppCommand sparkUI();
-   public abstract AppCommand sparkHelp();
    
    // Clipboard placeholders
    public abstract AppCommand undoDummy();

@@ -438,6 +438,12 @@ void readSourceMarkers()
       LOG_WARNING_MESSAGE("invalid session markers json");
       return;
    }
+   
+   if (!json::isType<json::Object>(stateJson))
+   {
+      LOG_WARNING_MESSAGE("invalid session markers json");
+      return;
+   }
 
    error = sourceMarkers().readFromJson(stateJson.get_obj());
    if (error)
@@ -491,6 +497,6 @@ Error initialize()
    
 } // namespace markers
 } // namespace modules
-} // namesapce session
+} // namespace session
 } // namespace rstudio
 

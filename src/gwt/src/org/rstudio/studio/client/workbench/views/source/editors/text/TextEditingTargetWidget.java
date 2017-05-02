@@ -46,6 +46,7 @@ import org.rstudio.core.client.events.EnsureVisibleEvent;
 import org.rstudio.core.client.events.EnsureVisibleHandler;
 import org.rstudio.core.client.events.MouseDragHandler;
 import org.rstudio.core.client.layout.RequiresVisibilityChanged;
+import org.rstudio.core.client.resources.ImageResource2x;
 import org.rstudio.core.client.theme.res.ThemeResources;
 import org.rstudio.core.client.widget.*;
 import org.rstudio.studio.client.RStudioGinjector;
@@ -57,6 +58,8 @@ import org.rstudio.studio.client.common.icons.StandardIcons;
 import org.rstudio.studio.client.rmarkdown.RmdOutput;
 import org.rstudio.studio.client.rmarkdown.events.RenderRmdEvent;
 import org.rstudio.studio.client.rmarkdown.events.RmdOutputFormatChangedEvent;
+import org.rstudio.studio.client.rmarkdown.model.RmdEditorOptions;
+import org.rstudio.studio.client.rmarkdown.model.YamlFrontMatter;
 import org.rstudio.studio.client.rsconnect.RSConnect;
 import org.rstudio.studio.client.rsconnect.ui.RSConnectPublishButton;
 import org.rstudio.studio.client.shiny.model.ShinyApplicationParams;
@@ -269,6 +272,7 @@ public class TextEditingTargetWidget
       toolbar.addLeftWidget(knitDocumentButton_);
       toolbar.addLeftWidget(compilePdfButton_ = commands_.compilePDF().createToolbarButton());
       rmdFormatButton_ = new ToolbarPopupMenuButton(false, true);
+      rmdFormatButton_.getMenu().setAutoOpen(true);
       toolbar.addLeftWidget(rmdFormatButton_);
       
       runDocumentMenuButton_ = new ToolbarPopupMenuButton(false, true);
@@ -276,13 +280,14 @@ public class TextEditingTargetWidget
       runDocumentMenuButton_.addSeparator();
       runDocumentMenuButton_.addMenuItem(commands_.clearPrerenderedOutput().createMenuItem(false), "");     
       toolbar.addLeftWidget(runDocumentMenuButton_);
+      runDocumentMenuButton_.setVisible(false);
       
       ToolbarPopupMenu rmdOptionsMenu = new ToolbarPopupMenu();
       rmdOptionsMenu.addItem(commands_.editRmdFormatOptions().createMenuItem(false));
       
       rmdOptionsButton_ = new ToolbarButton(
             null,  
-            StandardIcons.INSTANCE.options(),
+            new ImageResource2x(StandardIcons.INSTANCE.options2x()),
             rmdOptionsMenu, 
             false);
       
@@ -410,7 +415,7 @@ public class TextEditingTargetWidget
       
       toggleDocOutlineButton_ = new LatchingToolbarButton(
          "",
-            StandardIcons.INSTANCE.outline(),
+            new ImageResource2x(StandardIcons.INSTANCE.outline2x()),
             new ClickHandler()
             {
                @Override
@@ -450,6 +455,7 @@ public class TextEditingTargetWidget
                      @Override
                      protected void onComplete()
                      {
+                        if (destination == 0) editorPanel_.setWidgetSize(docOutlineWidget_, 0);
                         target_.setPreferredOutlineWidgetVisibility(destination != 0);
                      }
                   }.run(500);
@@ -495,7 +501,7 @@ public class TextEditingTargetWidget
    {
       if (codeTransform_ == null)
       {
-         ImageResource icon = ThemeResources.INSTANCE.codeTransform();
+         ImageResource icon = new ImageResource2x(ThemeResources.INSTANCE.codeTransform2x());
 
          ToolbarPopupMenu menu = new ToolbarPopupMenu();
          menu.addItem(commands_.codeCompletion().createMenuItem(false));
@@ -961,7 +967,7 @@ public class TextEditingTargetWidget
             DomUtils.htmlToText(
                   commands_.knitDocument().getShortcutPrettyHtml()) + ")");
       knitDocumentButton_.setText(knitCommandText_);
-      knitDocumentButton_.setLeftImage(StandardIcons.INSTANCE.run());
+      knitDocumentButton_.setLeftImage(new ImageResource2x(StandardIcons.INSTANCE.run2x()));
       
       runDocumentMenuButton_.setVisible(isShinyPrerendered);
       setKnitDocumentMenuVisible(isShinyPrerendered);
@@ -1021,7 +1027,21 @@ public class TextEditingTargetWidget
          }
          else if (type == SourceDocument.XT_RMARKDOWN)
          {
-            publishButton_.setRmd(publishPath, !isShiny_);
+            // assume static by default
+            boolean isStatic = true;
+            if (isShiny_)
+            {
+               // Shiny documents cannot be static
+               isStatic = false;
+            }
+            else if (!RmdEditorOptions.getBool(
+                  YamlFrontMatter.getFrontMatter(editor_), 
+                  RmdEditorOptions.PUBLISH_OUTPUT, true))
+            {
+               // don't publish as static if explicitly asked not to
+               isStatic = false;
+            }
+            publishButton_.setRmd(publishPath, isStatic);
          }
          else 
          {
@@ -1194,17 +1214,17 @@ public class TextEditingTargetWidget
             DocUpdateSentinel.PROPERTY_TRUE));
       menu.addSeparator();
       
-      if (uiPrefs_.showRmdChunkOutputInline().getValue() &&
-          type != RmdOutput.TYPE_SHINY)
+      if (type != RmdOutput.TYPE_SHINY)
       {
+        boolean inline = uiPrefs_.showRmdChunkOutputInline().getValue();
         menu.addItem(new DocPropMenuItem(
               "Chunk Output Inline", docUpdateSentinel_,
-              true,
+              inline,
               TextEditingTargetNotebook.CHUNK_OUTPUT_TYPE,
               TextEditingTargetNotebook.CHUNK_OUTPUT_INLINE));
         menu.addItem(new DocPropMenuItem(
               "Chunk Output in Console", docUpdateSentinel_,
-              false,
+              !inline,
               TextEditingTargetNotebook.CHUNK_OUTPUT_TYPE,
               TextEditingTargetNotebook.CHUNK_OUTPUT_CONSOLE));
          

@@ -299,6 +299,7 @@ public class AceEditor implements DocDisplay,
       backgroundTokenizer_ = new BackgroundTokenizer(this);
       vim_ = new Vim(this);
       bgLinkHighlighter_ = new AceEditorBackgroundLinkHighlighter(this);
+      bgChunkHighlighter_ = new AceBackgroundHighlighter(this);
       
       widget_.addValueChangeHandler(new ValueChangeHandler<Void>()
       {
@@ -445,6 +446,11 @@ public class AceEditor implements DocDisplay,
                   case PASTE_LAST_YANK:            pasteLastYank();            break;
                   case INSERT_ASSIGNMENT_OPERATOR: insertAssignmentOperator(); break;
                   case INSERT_PIPE_OPERATOR:       insertPipeOperator();       break;
+                  case JUMP_TO_MATCHING:           jumpToMatching();           break;
+                  case SELECT_TO_MATCHING:         selectToMatching();         break;
+                  case EXPAND_TO_MATCHING:         expandToMatching();         break;
+                  case ADD_CURSOR_ABOVE:           addCursorAbove();           break;
+                  case ADD_CURSOR_BELOW:           addCursorBelow();           break;
                   }
                }
             });
@@ -1941,6 +1947,22 @@ public class AceEditor implements DocDisplay,
       widget_.getEditor().retokenizeDocument();
    }
    
+   public void setScrollLeft(int x)
+   {
+      getSession().setScrollLeft(x);
+   }
+   
+   public void setScrollTop(int y)
+   {
+      getSession().setScrollTop(y);
+   }
+   
+   public void scrollTo(int x, int y)
+   {
+      getSession().setScrollLeft(x);
+      getSession().setScrollTop(y);
+   }
+   
    private native final void _setHighlightRFunctionCallsImpl(boolean highlight)
    /*-{
       var Mode = $wnd.require("mode/r_highlight_rules");
@@ -2420,11 +2442,29 @@ public class AceEditor implements DocDisplay,
    {
       widget_.getEditor().jumpToMatching(true, true);
    }
+   
+   @Override
+   public void addCursorAbove()
+   {
+      widget_.getEditor().execCommand("addCursorAbove");
+   }
+   
+   @Override
+   public void addCursorBelow()
+   {
+      widget_.getEditor().execCommand("addCursorBelow");
+   }
 
    @Override
    public void splitIntoLines()
    {
       widget_.getEditor().splitIntoLines();
+   }
+   
+   @Override
+   public int getFirstFullyVisibleRow()
+   {
+      return widget_.getEditor().getRenderer().getFirstFullyVisibleRow();
    }
 
    @Override
@@ -3046,7 +3086,7 @@ public class AceEditor implements DocDisplay,
       for (int i = tokens.length() - 1; i >= 0; i--)
       {
          Token t = tokens.get(i);
-         if (t.hasType("text", "comment"))
+         if (t.hasType("text", "comment", "virtual-comment"))
             continue;
          if (t.getType()  == "keyword.operator" ||
              t.getType()  == "keyword.operator.infix" ||
@@ -3061,7 +3101,7 @@ public class AceEditor implements DocDisplay,
    {
       JsArray<Token> tokens = getSession().getTokens(row);
       for (int i = 0, n = tokens.length(); i < n; i++)
-         if (!tokens.get(i).hasType("text", "comment"))
+         if (!tokens.get(i).hasType("text", "comment", "virtual-comment"))
             return false;
       return true;
    }
@@ -3100,7 +3140,7 @@ public class AceEditor implements DocDisplay,
       for (int i = 0; i < n; i++)
       {
          Token token = tokens.get(n - i - 1);
-         if (token.hasType("comment", "text"))
+         if (token.hasType("text", "comment", "virtual-comment"))
             continue;
          
          String tokenValue = token.getValue();
@@ -3110,6 +3150,41 @@ public class AceEditor implements DocDisplay,
       }
       
       return false;
+   }
+   
+   /**
+    * Finds the last non-empty line starting at the given line.
+    * 
+    * @param initial Row to start on
+    * @param limit Row at which to stop searching
+    * @return Index of last non-empty line, or limit line if no empty lines
+    *   were found.
+    */
+   private int findParagraphBoundary(int initial, int limit)
+   {
+      // no work to do if already at limit
+      if (initial == limit)
+         return initial;
+      
+      // walk towards limit
+      int delta = limit > initial ? 1 : -1;
+      for (int row = initial + delta; row != limit; row += delta)
+      {
+         if (getLine(row).trim().isEmpty())
+            return row - delta;
+      }
+      
+      // didn't find boundary
+      return limit;
+   }
+
+   @Override
+   public Range getParagraph(Position pos, int startRowLimit, int endRowLimit)
+   {
+      // find upper and lower paragraph boundaries
+      return Range.create(
+            findParagraphBoundary(pos.getRow(), startRowLimit), 0,
+            findParagraphBoundary(pos.getRow(), endRowLimit)+ 1, 0);
    }
 
    @Override
@@ -3491,6 +3566,19 @@ public class AceEditor implements DocDisplay,
       widget_.setDragEnabled(enabled);
    }
    
+   @Override
+   public boolean isSnippetsTabStopManagerActive()
+   {
+      return isSnippetsTabStopManagerActiveImpl(widget_.getEditor());
+   }
+   
+   private static final native
+   boolean isSnippetsTabStopManagerActiveImpl(AceEditorNative editor)
+   /*-{
+      return editor.tabstopManager != null;
+   }-*/;
+   
+   @Override
    public boolean onInsertSnippet()
    {
       return snippets_.onInsertSnippet();
@@ -3775,6 +3863,7 @@ public class AceEditor implements DocDisplay,
    private boolean showChunkOutputInline_ = false;
    private BackgroundTokenizer backgroundTokenizer_;
    private final Vim vim_;
+   private final AceBackgroundHighlighter bgChunkHighlighter_;
    private final AceEditorBackgroundLinkHighlighter bgLinkHighlighter_;
    private int scrollTarget_ = 0;
    private HandlerRegistration scrollCompleteReg_;

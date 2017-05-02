@@ -20,6 +20,7 @@ import java.util.List;
 
 import org.rstudio.core.client.DebugFilePosition;
 import org.rstudio.core.client.StringUtil;
+import org.rstudio.core.client.resources.ImageResource2x;
 import org.rstudio.core.client.widget.Operation;
 import org.rstudio.core.client.widget.SearchWidget;
 import org.rstudio.core.client.widget.SecondaryToolbar;
@@ -27,6 +28,7 @@ import org.rstudio.core.client.widget.Toolbar;
 import org.rstudio.core.client.widget.ToolbarButton;
 import org.rstudio.core.client.widget.ToolbarPopupMenu;
 import org.rstudio.studio.client.application.events.EventBus;
+import org.rstudio.studio.client.application.ui.RStudioThemes;
 import org.rstudio.studio.client.common.GlobalDisplay;
 import org.rstudio.studio.client.common.ImageMenuItem;
 import org.rstudio.studio.client.common.icons.StandardIcons;
@@ -153,7 +155,10 @@ public class EnvironmentPane extends WorkbenchPane
          }
       });
 
-      searchWidget.getElement().getStyle().setMarginTop(1, Unit.PX);
+      if (!RStudioThemes.isFlat(prefs_)) {
+         searchWidget.getElement().getStyle().setMarginTop(1, Unit.PX);
+      }
+
       toolbar.addRightWidget(searchWidget);
 
       return toolbar;
@@ -415,10 +420,12 @@ public class EnvironmentPane extends WorkbenchPane
    private Widget createImportMenu()
    {
       ToolbarPopupMenu menu = new ToolbarPopupMenu();
-      
-      menu.addItem(commands_.importDatasetFromCSV().createMenuItem(false));
+      menu.setAutoOpen(true);
+   
       menu.addItem(commands_.importDatasetFromFile().createMenuItem(false));
       menu.addItem(commands_.importDatasetFromURL().createMenuItem(false));
+      menu.addItem(commands_.importDatasetFromCsvUsingBase().createMenuItem(false));
+      menu.addItem(commands_.importDatasetFromCsvUsingReadr().createMenuItem(false));
       menu.addSeparator();
       menu.addItem(commands_.importDatasetFromXLS().createMenuItem(false));
       menu.addSeparator();
@@ -436,7 +443,7 @@ public class EnvironmentPane extends WorkbenchPane
       
       dataImportButton_ = new ToolbarButton(
               "Import Dataset",
-              StandardIcons.INSTANCE.import_dataset(),
+              new ImageResource2x(StandardIcons.INSTANCE.import_dataset2x()),
               menu);
       return dataImportButton_;
 
@@ -460,15 +467,15 @@ public class EnvironmentPane extends WorkbenchPane
    private ImageResource imageOfEnvironment(String name, boolean local)
    {
       if (name.endsWith("()"))
-         return EnvironmentResources.INSTANCE.functionEnvironment();
+         return new ImageResource2x(EnvironmentResources.INSTANCE.functionEnvironment2x());
       else if (name.equals(".GlobalEnv") || name.equals("R_GlobalEnv"))
-         return EnvironmentResources.INSTANCE.globalEnvironment();
+         return new ImageResource2x(EnvironmentResources.INSTANCE.globalEnvironment2x());
       else if (name.startsWith("package:") ||
                name.equals("base") || 
                local)
-         return EnvironmentResources.INSTANCE.packageEnvironment();
+         return new ImageResource2x(EnvironmentResources.INSTANCE.packageEnvironment2x());
       else 
-         return EnvironmentResources.INSTANCE.attachedEnvironment();
+         return new ImageResource2x(EnvironmentResources.INSTANCE.attachedEnvironment2x());
    }
    
    private void setEnvironments(JsArray<EnvironmentFrame> environments)
@@ -539,9 +546,9 @@ public class EnvironmentPane extends WorkbenchPane
    private ImageResource imageOfViewType(int type)
    {
       if (type == EnvironmentObjects.OBJECT_LIST_VIEW)
-         return EnvironmentResources.INSTANCE.objectListView();
+         return new ImageResource2x(EnvironmentResources.INSTANCE.objectListView2x());
       else if (type == EnvironmentObjects.OBJECT_GRID_VIEW)
-         return EnvironmentResources.INSTANCE.objectGridView();
+         return new ImageResource2x(EnvironmentResources.INSTANCE.objectGridView2x());
       return null;
    }
    
@@ -557,7 +564,7 @@ public class EnvironmentPane extends WorkbenchPane
                {
                   setObjectDisplayType(type);
                }
-            }, 2);
+            }, -1);
    }
    
    // An extension of the toolbar popup menu that gets environment names from

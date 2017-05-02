@@ -164,6 +164,9 @@ public:
 
    bool showUserHomePage() const { return showUserHomePage_; }
    
+   std::string defaultConsoleTerm() const { return defaultConsoleTerm_; }
+   bool defaultCliColorForce() const { return defaultCliColorForce_; }
+
    core::FilePath coreRSourcePath() const 
    { 
       return core::FilePath(coreRSourcePath_.c_str());
@@ -271,6 +274,11 @@ public:
       return core::FilePath(winutilsPath_.c_str());
    }
    
+   core::FilePath winptyPath() const
+   {
+      return core::FilePath(winptyPath_.c_str());
+   }
+
    core::FilePath hunspellDictionariesPath() const
    {
       return core::FilePath(hunspellDictionariesPath_.c_str());
@@ -301,9 +309,19 @@ public:
       return allowOverlay() || allowFileDownloads_;
    }
 
+   bool allowFileUploads() const
+   {
+      return allowOverlay() || allowFileUploads_;
+   }
+
    bool allowShell() const
    {
       return allowOverlay() || allowShell_;
+   }
+
+   bool allowTerminalWebsockets() const
+   {
+      return allowOverlay() || allowTerminalWebsockets_;
    }
 
    bool allowPackageInstallation() const
@@ -344,6 +362,11 @@ public:
    bool allowPublish() const
    {
       return allowOverlay() || allowPublish_;
+   }
+
+   bool supportsDriversLicensing() const
+   {
+      return !allowOverlay();
    }
 
    bool allowPresentationCommands() const
@@ -534,6 +557,8 @@ private:
    std::string defaultProjectDir_;
    bool showHelpHome_;
    bool showUserHomePage_;
+   std::string defaultConsoleTerm_;
+   bool defaultCliColorForce_;
 
    // r
    std::string coreRSourcePath_;
@@ -569,12 +594,15 @@ private:
    std::string pandocPath_;
    std::string libclangPath_;
    std::string libclangHeadersPath_;
+   std::string winptyPath_;
 
    // root directory for locating resources
    core::FilePath resourcePath_;
 
    bool allowFileDownloads_;
+   bool allowFileUploads_;
    bool allowShell_;
+   bool allowTerminalWebsockets_;
    bool allowPackageInstallation_;
    bool allowVcs_;
    bool allowCRANReposEdit_;

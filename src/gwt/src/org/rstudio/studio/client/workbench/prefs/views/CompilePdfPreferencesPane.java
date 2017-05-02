@@ -1,7 +1,7 @@
 /*
  * CompilePdfPreferencesPane.java
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -21,6 +21,7 @@ import com.google.gwt.user.client.ui.Label;
 import com.google.inject.Inject;
 
 import org.rstudio.core.client.prefs.PreferencesDialogBaseResources;
+import org.rstudio.core.client.resources.ImageResource2x;
 import org.rstudio.core.client.widget.HelpButton;
 import org.rstudio.core.client.widget.SelectWidget;
 import org.rstudio.studio.client.common.latex.LatexProgramSelectWidget;
@@ -73,11 +74,9 @@ public class CompilePdfPreferencesPane extends PreferencesPane
       spaced(chkEnableShellEscape_);
       add(chkEnableShellEscape_);
       
-      CheckBox chkNumberedSections = checkboxPref(
-                                  "Insert numbered sections and subsections",
-                                  prefs_.insertNumberedLatexSections());
-      spaced(chkNumberedSections);
-      add(chkNumberedSections);
+      add(spaced(checkboxPref(
+            "Insert numbered sections and subsections",
+            prefs_.insertNumberedLatexSections(), false /*defaultSpace*/)));
             
       Label previewingOptionsLabel = headerLabel("PDF preview");
       previewingOptionsLabel.getElement().getStyle().setMarginTop(8, Unit.PX);
@@ -86,11 +85,10 @@ public class CompilePdfPreferencesPane extends PreferencesPane
       pdfPreview_ = new PdfPreviewSelectWidget();
       add(pdfPreview_);
       
-      CheckBox chkConcordance = checkboxPref(
+      add(spaced(checkboxPref(
             "Always enable Rnw concordance (required for synctex)",
-            prefs_.alwaysEnableRnwConcordance());
-      spaced(chkConcordance);
-      add(chkConcordance);
+            prefs_.alwaysEnableRnwConcordance(),
+            false /*defaultSpaces*/)));
    }
 
    private class PdfPreviewSelectWidget extends SelectWidget
@@ -114,7 +112,7 @@ public class CompilePdfPreferencesPane extends PreferencesPane
    @Override
    public ImageResource getIcon()
    {
-      return PreferencesDialogBaseResources.INSTANCE.iconCompilePdf();
+      return new ImageResource2x(PreferencesDialogBaseResources.INSTANCE.iconCompilePdf2x());
    }
 
    @Override

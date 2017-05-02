@@ -1,7 +1,7 @@
 /*
  * Application.java
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -17,6 +17,7 @@ package org.rstudio.studio.client.application;
 
 import com.google.gwt.core.client.GWT;
 import com.google.gwt.core.client.RunAsyncCallback;
+import com.google.gwt.dom.client.Document;
 import com.google.gwt.dom.client.Element;
 import com.google.gwt.dom.client.FormElement;
 import com.google.gwt.dom.client.InputElement;
@@ -57,6 +58,7 @@ import org.rstudio.studio.client.application.model.InvalidSessionInfo;
 import org.rstudio.studio.client.application.model.ProductInfo;
 import org.rstudio.studio.client.application.model.SessionSerializationAction;
 import org.rstudio.studio.client.application.ui.AboutDialog;
+import org.rstudio.studio.client.application.ui.RStudioThemes;
 import org.rstudio.studio.client.application.ui.RequestLogVisualization;
 import org.rstudio.studio.client.common.GlobalDisplay;
 import org.rstudio.studio.client.common.SimpleRequestCallback;
@@ -143,6 +145,7 @@ public class Application implements ApplicationEventHandlers
       events.addHandler(ServerOfflineEvent.TYPE, this);
       events.addHandler(InvalidSessionEvent.TYPE, this);
       events.addHandler(SwitchToRVersionEvent.TYPE, this);
+      events.addHandler(ThemeChangedEvent.TYPE, this);
       
       // register for uncaught exceptions
       uncaughtExHandler.register();
@@ -151,8 +154,11 @@ public class Application implements ApplicationEventHandlers
    public void go(final RootLayoutPanel rootPanel, 
                   final Command dismissLoadingProgress)
    {
+      rootPanel_ = rootPanel;
+
       Widget w = view_.getWidget();
       rootPanel.add(w);
+
       rootPanel.setWidgetTopBottom(w, 0, Style.Unit.PX, 0, Style.Unit.PX);
       rootPanel.setWidgetLeftRight(w, 0, Style.Unit.PX, 0, Style.Unit.PX);
 
@@ -611,6 +617,14 @@ public class Application implements ApplicationEventHandlers
       view_.showSessionAbendWarning();
    }
    
+   @Override
+   public void onThemeChanged(ThemeChangedEvent event)
+   {
+      RStudioThemes.initializeThemes(uiPrefs_.get().getFlatTheme().getGlobalValue(),
+                                     Document.get(),
+                                     rootPanel_.getElement());
+   }
+   
    private void verifyAgreement(SessionInfo sessionInfo,
                               final Operation verifiedOperation)
    {
@@ -703,6 +717,10 @@ public class Application implements ApplicationEventHandlers
    
    private void initializeWorkbench()
    {
+      RStudioThemes.initializeThemes(uiPrefs_.get().getFlatTheme().getGlobalValue(),
+                                     Document.get(),
+                                     rootPanel_.getElement());
+
       pAceThemes_.get();
 
       // subscribe to ClientDisconnected event (wait to do this until here
@@ -720,14 +738,13 @@ public class Application implements ApplicationEventHandlers
 
       // disable commands
       SessionInfo sessionInfo = session_.getSessionInfo();
+
       if (!sessionInfo.getAllowShell())
       {
          commands_.showShellDialog().remove();
+         removeTerminalCommands();
       }
-      if (!uiPrefs_.get().enableXTerm().getValue())
-      {
-         commands_.newTerminal().remove();
-      }
+
       if (!sessionInfo.getAllowPackageInstallation())
       {
          commands_.installPackage().remove();
@@ -740,6 +757,10 @@ public class Application implements ApplicationEventHandlers
       if (!sessionInfo.getAllowFileDownloads())
       {
          commands_.exportFiles().remove();
+      }
+      if (!sessionInfo.getAllowFileUploads())
+      {
+         commands_.uploadFile().remove();
       }
       
       // disable external publishing if requested
@@ -762,7 +783,7 @@ public class Application implements ApplicationEventHandlers
          commands_.importDatasetFromFile().remove();
          commands_.importDatasetFromURL().remove();
          
-         commands_.importDatasetFromCSV().setVisible(false);
+         commands_.importDatasetFromCsvUsingReadr().setVisible(false);
          commands_.importDatasetFromSAV().setVisible(false);
          commands_.importDatasetFromSAS().setVisible(false);
          commands_.importDatasetFromStata().setVisible(false);
@@ -775,7 +796,7 @@ public class Application implements ApplicationEventHandlers
             String rVersion = sessionInfo.getRVersionsInfo().getRVersion();
             if (ApplicationUtils.compareVersions(rVersion, "3.0.2") >= 0)
             {
-               commands_.importDatasetFromCSV().setVisible(true);
+               commands_.importDatasetFromCsvUsingReadr().setVisible(true);
             }
             if (ApplicationUtils.compareVersions(rVersion, "3.1.0") >= 0)
             {
@@ -807,7 +828,9 @@ public class Application implements ApplicationEventHandlers
       }
       else
       {
-         commands_.importDatasetFromCSV().remove();
+         commands_.importDatasetFromCsv().remove();
+         commands_.importDatasetFromCsvUsingBase().remove();
+         commands_.importDatasetFromCsvUsingReadr().remove();
          commands_.importDatasetFromSAV().remove();
          commands_.importDatasetFromSAS().remove();
          commands_.importDatasetFromStata().remove();
@@ -954,6 +977,18 @@ public class Application implements ApplicationEventHandlers
       navigateWindowTo("auth-sign-in");
    }
    
+   private void removeTerminalCommands()
+   {
+      commands_.newTerminal().remove();
+      commands_.activateTerminal().remove();
+      commands_.renameTerminal().remove();
+      commands_.closeTerminal().remove();
+      commands_.clearTerminalScrollbackBuffer().remove();
+      commands_.previousTerminal().remove();
+      commands_.nextTerminal().remove();
+      commands_.showTerminalInfo().remove();
+   }
+
    private final ApplicationView view_ ;
    private final GlobalDisplay globalDisplay_ ;
    private final EventBus events_;
@@ -973,4 +1008,5 @@ public class Application implements ApplicationEventHandlers
    private final String CSRF_TOKEN_FIELD = "csrf-token";
 
    private ClientStateUpdater clientStateUpdaterInstance_;
+   private RootLayoutPanel rootPanel_;
 }

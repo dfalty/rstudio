@@ -1,7 +1,7 @@
 /*
  * PosixChildProcess.cpp
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -14,6 +14,7 @@
  */
 
 #include "ChildProcess.hpp"
+#include "ChildProcessSubprocPoll.hpp"
 
 #include <fcntl.h>
 #include <signal.h>
@@ -53,6 +54,11 @@ namespace {
 const int READ = 0;
 const int WRITE = 1;
 const std::size_t READ_ERR = -1;
+
+const boost::posix_time::milliseconds kResetRecentDelay =
+                                         boost::posix_time::milliseconds(1000);
+const boost::posix_time::milliseconds kCheckSubprocDelay =
+                                         boost::posix_time::milliseconds(200);
 
 int resolveExitStatus(int status)
 {
@@ -147,7 +153,7 @@ struct ChildProcess::Impl
    {
    }
 
-   pid_t pid;
+   PidType pid;
    int fdStdin;
    int fdStdout;
    int fdStderr;
@@ -156,7 +162,7 @@ struct ChildProcess::Impl
    int fdMaster;
    char ctrlC;
 
-   void init(pid_t pid, int fdStdin, int fdStdout, int fdStderr)
+   void init(PidType pid, int fdStdin, int fdStdout, int fdStderr)
    {
       this->pid = pid;
       this->fdStdin = fdStdin;
@@ -165,7 +171,7 @@ struct ChildProcess::Impl
       this->fdMaster = -1;
    }
 
-   void init(pid_t pid, int fdMaster)
+   void init(PidType pid, int fdMaster)
    {
       this->pid = pid;
       this->fdStdin = fdMaster;
@@ -237,6 +243,20 @@ void ChildProcess::init(const std::string& command,
    args.push_back(realCommand);
 
    init("/bin/sh", args, options);
+}
+
+// Initialize for an interactive terminal
+void ChildProcess::init(const ProcessOptions& options)
+{
+   if (!options.stdOutFile.empty() || !options.stdErrFile.empty())
+   {
+      LOG_ERROR_MESSAGE(
+               "stdOutFile/stdErrFile options cannot be used with interactive terminal");
+   }
+
+   options_ = options;
+   exe_ = options_.shellPath.absolutePath();
+   args_ = options_.args;
 }
 
 ChildProcess::~ChildProcess()
@@ -331,7 +351,7 @@ Error ChildProcess::terminate()
    else
    {
       // determine target pid (kill just this pid or pid + children)
-      pid_t pid = pImpl_->pid;
+      PidType pid = pImpl_->pid;
       if (options_.detachSession || options_.terminateChildren)
       {
          pid = -pid;
@@ -356,11 +376,22 @@ Error ChildProcess::terminate()
    }
 }
 
+bool ChildProcess::hasSubprocess() const
+{
+   // base class doesn't support subprocess-checking; override to implement
+   return true;
+}
+
+bool ChildProcess::hasRecentOutput() const
+{
+   // base class doesn't support output tracking; override to implement
+   return true;
+}
 
 Error ChildProcess::run()
 {  
    // declarations
-   pid_t pid = 0;
+   PidType pid = 0;
    int fdInput[2] = {0,0};
    int fdOutput[2] = {0,0};
    int fdError[2] = {0,0};
@@ -376,7 +407,7 @@ Error ChildProcess::run()
       winSize.ws_row = options_.pseudoterminal.get().rows;
       winSize.ws_xpixel = 0;
       winSize.ws_ypixel = 0;
-      Error error = posixCall<pid_t>(
+      Error error = posixCall<PidType>(
          boost::bind(::forkpty, &fdMaster, nullName, nullTermp, &winSize),
          ERROR_LOCATION,
          &pid);
@@ -410,7 +441,7 @@ Error ChildProcess::run()
       }
 
       // fork
-      error = posixCall<pid_t>(::fork, ERROR_LOCATION, &pid);
+      error = posixCall<PidType>(::fork, ERROR_LOCATION, &pid);
       if (error)
       {
          closePipe(fdInput, ERROR_LOCATION);
@@ -486,17 +517,27 @@ Error ChildProcess::run()
             ERROR_LOCATION);
          if (!error)
          {
-            // specify raw mode (but don't ignore signals -- this is done
-            // so we can send Ctrl-C for interrupts)
-            ::cfmakeraw(&termp);
-            termp.c_lflag |= ISIG;
-
-            // for smart terminals we need to echo back the user input
-            if (options_.smartTerminal)
+            if (!options_.smartTerminal)
             {
+               // Specify raw mode; not doing this for terminal (versus dumb
+               // shell) because on Linux, it broke things like "passwd"
+               // command's ability to collect passwords).
+               ::cfmakeraw(&termp);
+            }
+            else
+            {
+               // for smart terminals we need to echo back the user input
                termp.c_lflag |= ECHO;
                termp.c_oflag |= OPOST|ONLCR;
+
+               // Turn off XON/XOFF flow control so Ctrl+S can be used by
+               // the shell command-line editing instead of suspending output.
+               termp.c_iflag &= ~(IXON|IXOFF);
             }
+
+            // Don't ignore signals -- this is done
+            // so we can send Ctrl-C for interrupts
+            termp.c_lflag |= ISIG;
 
             // set attribs
             safePosixCall<int>(
@@ -631,7 +672,7 @@ Error SyncChildProcess::waitForExit(int* pExitStatus)
 {
    // blocking wait for exit
    int status;
-   pid_t result = posixCall<pid_t>(
+   PidType result = posixCall<PidType>(
       boost::bind(::waitpid, pImpl_->pid, &status, 0));
 
    // always close all of the pipes
@@ -663,11 +704,11 @@ struct AsyncChildProcess::AsyncImpl
         exited_(false)
    {
    }
-
    bool calledOnStarted_;
    bool finishedStdout_;
    bool finishedStderr_;
    bool exited_;
+   boost::scoped_ptr<ChildProcessSubprocPoll> pSubprocPoll_;
 };
 
 AsyncChildProcess::AsyncChildProcess(const std::string& exe,
@@ -678,7 +719,7 @@ AsyncChildProcess::AsyncChildProcess(const std::string& exe,
    init(exe, args, options);
    if (!options.stdOutFile.empty() || !options.stdErrFile.empty())
    {
-      LOG_ERROR_MESSAGE(
+      LOG_WARNING_MESSAGE(
                "stdOutFile/stdErrFile options cannot be used with runProgram");
    }
 }
@@ -688,6 +729,12 @@ AsyncChildProcess::AsyncChildProcess(const std::string& command,
       : ChildProcess(), pAsyncImpl_(new AsyncImpl())
 {
    init(command, options);
+}
+
+AsyncChildProcess::AsyncChildProcess(const ProcessOptions& options)
+      : ChildProcess(), pAsyncImpl_(new AsyncImpl())
+{
+   init(options);
 }
 
 AsyncChildProcess::~AsyncChildProcess()
@@ -707,6 +754,21 @@ Error AsyncChildProcess::terminate()
    return ChildProcess::terminate();
 }
 
+bool AsyncChildProcess::hasSubprocess() const
+{
+   if (pAsyncImpl_->pSubprocPoll_)
+      return pAsyncImpl_->pSubprocPoll_->hasSubprocess();
+   else
+      return true;
+}
+
+bool AsyncChildProcess::hasRecentOutput() const
+{
+   if (pAsyncImpl_->pSubprocPoll_)
+      return pAsyncImpl_->pSubprocPoll_->hasRecentOutput();
+   else
+      return true;
+}
 
 void AsyncChildProcess::poll()
 {
@@ -723,11 +785,16 @@ void AsyncChildProcess::poll()
       else
          setPipeNonBlocking(pImpl_->fdStderr);         
 
+      // setup for subprocess polling
+      pAsyncImpl_->pSubprocPoll_.reset(new ChildProcessSubprocPoll(
+         pImpl_->pid,
+         kResetRecentDelay, kCheckSubprocDelay,
+         options().reportHasSubprocs ? core::system::hasSubprocesses : NULL));
+
       if (callbacks_.onStarted)
          callbacks_.onStarted(*this);
       pAsyncImpl_->calledOnStarted_ = true;
    }
-
    // call onContinue
    if (callbacks_.onContinue)
    {
@@ -739,6 +806,8 @@ void AsyncChildProcess::poll()
             LOG_ERROR(error);
       }
    }
+
+   bool hasRecentOutput = false;
 
    // check stdout and fire event if we got output
    if (!pAsyncImpl_->finishedStdout_)
@@ -753,7 +822,10 @@ void AsyncChildProcess::poll()
       else
       {
          if (!out.empty() && callbacks_.onStdout)
+         {
+            hasRecentOutput = true;
             callbacks_.onStdout(*this, out);
+         }
 
          if (eof)
            pAsyncImpl_->finishedStdout_ = true;
@@ -774,13 +846,15 @@ void AsyncChildProcess::poll()
       else
       {
          if (!err.empty() && callbacks_.onStderr)
+         {
+            hasRecentOutput = true;
             callbacks_.onStderr(*this, err);
+         }
 
          if (eof)
            pAsyncImpl_->finishedStderr_ = true;
       }
    }
-
 
    // Check for exited. Note that this method specifies WNOHANG
    // so we don't block forever waiting for a process the exit. We may
@@ -789,7 +863,7 @@ void AsyncChildProcess::poll()
    // case we'll allow the exit sequence to proceed and simply pass -1 as
    // the exit status.
    int status;
-   pid_t result = posixCall<pid_t>(
+   PidType result = posixCall<PidType>(
             boost::bind(::waitpid, pImpl_->pid, &status, WNOHANG));
 
    // either a normal exit or an error while waiting
@@ -814,12 +888,22 @@ void AsyncChildProcess::poll()
       // set exited_ flag so that our exited function always
       // returns the right value
       pAsyncImpl_->exited_ = true;
+      pAsyncImpl_->pSubprocPoll_->stop();
 
       // if this is an error that isn't ECHILD then log it (we never
       // expect this to occur as the only documented error codes are
       // EINTR and ECHILD, and EINTR is handled internally by posixCall)
       if (result == -1 && errno != ECHILD && errno != ENOENT)
          LOG_ERROR(systemError(errno, ERROR_LOCATION));
+   }
+
+   // Perform optional periodic operations
+   if (pAsyncImpl_->pSubprocPoll_->poll(hasRecentOutput))
+   {
+      if (callbacks_.onHasSubprocs)
+      {
+         callbacks_.onHasSubprocs(hasSubprocess());
+      }
    }
 }
 

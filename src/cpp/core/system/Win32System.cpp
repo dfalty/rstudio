@@ -1,7 +1,7 @@
 /*
  * Win32System.cpp
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -26,6 +26,7 @@
 
 #include <windows.h>
 #include <shlobj.h>
+#include <tlhelp32.h>
 
 #include <boost/foreach.hpp>
 #include <boost/bind.hpp>
@@ -222,7 +223,12 @@ void log(LogLevel logLevel, const std::string& message)
 bool isWin64()
 {
    return !getenv("PROCESSOR_ARCHITEW6432").empty()
-         || getenv("PROCESSOR_ARCHITECTURE") == "AMD64";
+      || getenv("PROCESSOR_ARCHITECTURE") == "AMD64";
+}
+
+bool isCurrentProcessWin64()
+{
+   return getenv("PROCESSOR_ARCHITECTURE") == "AMD64";
 }
 
 bool isVistaOrLater()
@@ -234,6 +240,25 @@ bool isVistaOrLater()
    if (::GetVersionExA(&osVersion))
    {
       return osVersion.dwMajorVersion >= 6;
+   }
+   else
+   {
+      LOG_ERROR(systemError(::GetLastError(), ERROR_LOCATION));
+      return false;
+   }
+}
+
+bool isWin7OrLater()
+{
+   OSVERSIONINFOA osVersion;
+   ZeroMemory(&osVersion, sizeof(OSVERSIONINFOA));
+   osVersion.dwOSVersionInfoSize = sizeof(OSVERSIONINFOA);
+
+   if (::GetVersionExA(&osVersion))
+   {
+      // 6.0 Vista, 6.1 Win7, 6.2 Win8, 6.3 Win8.1, >6 is Win10+
+      return osVersion.dwMajorVersion > 6 ||
+             osVersion.dwMajorVersion == 6 && osVersion.dwMinorVersion > 0;
    }
    else
    {
@@ -496,6 +521,11 @@ Error realPath(const FilePath& filePath, FilePath* pRealPath)
    wPath = std::wstring(&(buffer[0]), res);
    *pRealPath = FilePath(wPath);
    return Success();
+}
+
+Error realPath(const std::string& path, FilePath* pRealPath)
+{
+   return realPath(FilePath(path), pRealPath);
 }
 
 bool isHiddenFile(const FilePath& filePath)
@@ -801,6 +831,41 @@ void ensureLongPath(FilePath* pFilePath)
       *pFilePath = FilePath(string_utils::systemToUtf8(buffer));
    }
 }
+Error expandEnvironmentVariables(std::string value, std::string* pResult)
+{
+   if (value.empty())
+   {
+      *pResult = value;
+      return Success();
+   }
+
+   DWORD sizeRequired = ::ExpandEnvironmentStrings(value.c_str(), NULL, 0);
+   if (!sizeRequired)
+      return systemError(::GetLastError(), ERROR_LOCATION);
+
+   std::vector<char> buffer;
+   buffer.reserve(sizeRequired);
+   int result = ::ExpandEnvironmentStrings(value.c_str(),
+                                           &buffer[0],
+                                           buffer.capacity());
+
+   if (!result)
+      return systemError(GetLastError(), ERROR_LOCATION);
+   else if (result > buffer.capacity())
+      return systemError(ERROR_MORE_DATA, ERROR_LOCATION); // not expected
+
+   *pResult = std::string(&buffer[0]);
+   return Success();
+}
+
+FilePath expandComSpec()
+{
+   std::string result;
+   Error err = expandEnvironmentVariables("%COMSPEC%", &result);
+   if (err)
+      return FilePath();
+   return FilePath(result);
+}
 
 Error terminateProcess(PidType pid)
 {
@@ -812,6 +877,40 @@ Error terminateProcess(PidType pid)
    return Success();
 }
 
+bool hasSubprocesses(PidType pid)
+{
+   HANDLE hSnapShot;
+   CloseHandleOnExitScope closeSnapShot(&hSnapShot, ERROR_LOCATION);
+
+   hSnapShot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+   if (hSnapShot == INVALID_HANDLE_VALUE)
+   {
+      // err on the side of assuming child processes, so we don't kill
+      // a job unintentionally
+      LOG_ERROR(systemError(::GetLastError(), ERROR_LOCATION));
+      return true;
+   }
+
+   PROCESSENTRY32 pe32;
+   pe32.dwSize = sizeof(pe32);
+   if (!Process32First(hSnapShot, &pe32))
+   {
+      LOG_ERROR(systemError(::GetLastError(), ERROR_LOCATION));
+      return true;
+   }
+
+   do
+   {
+      if (pe32.th32ParentProcessID == pid)
+      {
+         // Found a child process
+         return true;
+      }
+   } while (Process32Next(hSnapShot, &pe32));
+
+   // Didn't find a child process
+   return false;
+}
 
 Error closeHandle(HANDLE* pHandle, const ErrorLocation& location)
 {
@@ -835,7 +934,10 @@ CloseHandleOnExitScope::~CloseHandleOnExitScope()
 {
    try
    {
-      if (!pHandle_ || *pHandle_ == INVALID_HANDLE_VALUE)
+      // A "null" handle can contain INVALID_HANDLE or NULL, depending
+      // on the context. This is a painful inconsistency in Windows, see:
+      // https://blogs.msdn.microsoft.com/oldnewthing/20040302-00/?p=40443
+      if (!pHandle_ || *pHandle_ == INVALID_HANDLE_VALUE || *pHandle_ == NULL)
          return;
 
       Error error = closeHandle(pHandle_, location_);

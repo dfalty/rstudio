@@ -46,6 +46,22 @@
   invisible(.Call(getNativeSymbolInfo("rs_viewer", PACKAGE=""), url, height))     
 })
 
+
+.rs.addApiFunction("savePlotAsImage", function(
+                   file, 
+                   format = c("png", "jpeg", "bmp", "tiff", "emf", "svg", "eps"),
+                   width,
+                   height) {
+   
+   file <- path.expand(file)
+   format <- match.arg(format)
+   if (!is.numeric(width))
+      stop("width argument mut be numeric", call. = FALSE)
+   if (!is.numeric(height))
+      stop("height argument mut be numeric", call. = FALSE)
+   invisible(.Call("rs_savePlotAsImage", file, format, width, height))
+})
+
 .rs.addApiFunction("sourceMarkers", function(name, 
                                              markers, 
                                              basePath = NULL,
@@ -283,9 +299,6 @@
    .rs.getProjectDirectory()
 })
 
-
-
-
 .rs.addApiFunction("sendToConsole", function(code,
                                              echo = TRUE,
                                              execute = TRUE,
@@ -309,3 +322,79 @@
 .rs.addApiFunction("askForPassword", function(prompt) {
    .rs.askForPassword(prompt)
 })
+
+.rs.addFunction("dialogIcon", function(name) {
+  list(
+    info = 1,
+    warning = 2,
+    error = 3,
+    question = 4
+  )
+})
+
+.rs.addApiFunction("showDialog", function(title, message, url = "") {
+   .Call("rs_showDialog",
+      title = title,
+      message = message,
+      dialogIcon = .rs.dialogIcon()$info,
+      prompt = FALSE,
+      promptDefault = NULL,
+      ok = NULL,
+      cancel = NULL,
+      url = url)
+})
+
+.rs.addApiFunction("updateDialog", function(...)
+{
+   scalarValues <- lapply(list(...), .rs.scalar)
+   .rs.enqueClientEvent("update_new_connection_dialog", scalarValues)
+
+   invisible(NULL)
+})
+
+.rs.addApiFunction("showPrompt", function(title, message, default = "") {
+   .Call("rs_showDialog",
+      title = title,
+      message = message,
+      dialogIcon = .rs.dialogIcon()$info,
+      prompt = TRUE,
+      promptDefault = default,
+      ok = NULL,
+      cancel = NULL,
+      url = NULL)
+})
+
+.rs.addApiFunction("showQuestion", function(title, message, ok = "", cancel = "") {
+   .Call("rs_showDialog",
+      title = title,
+      message = message,
+      dialogIcon = .rs.dialogIcon()$question,
+      prompt = FALSE,
+      promptDefault = NULL,
+      ok = ok,
+      cancel = cancel,
+      url = NULL)
+})
+
+.rs.addApiFunction("writePreference", function(name, value) {
+  .rs.writeUiPref(paste("rstudioapi", name, sep = "_"), value)
+})
+
+.rs.addApiFunction("readPreference", function(name, default = NULL) {
+  value <- .rs.readUiPref(paste("rstudioapi", name, sep = "_"))
+  if (is.null(value)) default else value
+})
+
+.rs.addApiFunction("setPersistentValue", function(name, value) {
+   invisible(.Call("rs_setPersistentValue", name, value))
+})
+
+.rs.addApiFunction("getPersistentValue", function(name) {
+   .Call("rs_getPersistentValue", name)
+})
+
+.rs.addApiFunction("getConsoleHasColor", function(name) {
+   value <- .rs.readUiPref("ansi_console_mode")
+   if (is.null(value) || value != 1) FALSE else TRUE
+})
+

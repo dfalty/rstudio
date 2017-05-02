@@ -1,7 +1,7 @@
 /*
  * Win32ChildProcess.cpp
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -14,12 +14,13 @@
  */
 
 #include "ChildProcess.hpp"
+#include "ChildProcessSubprocPoll.hpp"
+#include "Win32Pty.hpp"
 
 #include <iostream>
 
 #include <windows.h>
 #include <Shlwapi.h>
-
 
 #include <boost/foreach.hpp>
 #include <boost/algorithm/string/predicate.hpp>
@@ -37,6 +38,10 @@ namespace system {
 
 namespace {
 
+const boost::posix_time::milliseconds kResetRecentDelay =
+                                         boost::posix_time::milliseconds(1000);
+const boost::posix_time::milliseconds kCheckSubprocDelay =
+                                         boost::posix_time::milliseconds(200);
 
 std::string findOnPath(const std::string& exe,
                        const std::string& appendExt = "")
@@ -62,7 +67,6 @@ std::string findOnPath(const std::string& exe,
       return std::string();
    }
 }
-
 
 // resolve the passed command and arguments to the form required for a
 // call to CreateProcess (do path lookup if necessary and invoke the
@@ -99,36 +103,6 @@ void resolveCommand(std::string* pExecutable, std::vector<std::string>* pArgs)
          }
       }
    }
-}
-
-
-Error readPipeAvailableBytes(HANDLE hPipe, std::string* pOutput)
-{
-   // check for available bytes
-   DWORD dwAvail = 0;
-   if (!::PeekNamedPipe(hPipe, NULL, 0, NULL, &dwAvail, NULL))
-   {
-      if (::GetLastError() == ERROR_BROKEN_PIPE)
-         return Success();
-      else
-         return systemError(::GetLastError(), ERROR_LOCATION);
-   }
-
-   // no data available
-   if (dwAvail == 0)
-      return Success();
-
-   // read data which is available
-   DWORD nBytesRead;
-   std::vector<CHAR> buffer(dwAvail, 0);
-   if (!::ReadFile(hPipe, &(buffer[0]), dwAvail, &nBytesRead, NULL))
-      return systemError(::GetLastError(), ERROR_LOCATION);
-
-   // append to output
-   pOutput->append(&(buffer[0]), nBytesRead);
-
-   // success
-   return Success();
 }
 
 Error readPipeUntilDone(HANDLE hPipe, std::string* pOutput)
@@ -173,7 +147,9 @@ struct ChildProcess::Impl
         closeStdIn_(&hStdInWrite, ERROR_LOCATION),
         closeStdOut_(&hStdOutRead, ERROR_LOCATION),
         closeStdErr_(&hStdErrRead, ERROR_LOCATION),
-        closeProcess_(&hProcess, ERROR_LOCATION)
+        closeProcess_(&hProcess, ERROR_LOCATION),
+        pid(static_cast<PidType>(-1)),
+        ctrlC(0x03)
    {
    }
 
@@ -181,6 +157,9 @@ struct ChildProcess::Impl
    HANDLE hStdOutRead;
    HANDLE hStdErrRead;
    HANDLE hProcess;
+   PidType pid;
+   WinPty pty;
+   char ctrlC;
 
 private:
    CloseHandleOnExitScope closeStdIn_;
@@ -222,6 +201,14 @@ void ChildProcess::init(const std::string& command,
    options_ = options;
 }
 
+// initialize for an interactive terminal
+void ChildProcess::init(const ProcessOptions& options)
+{
+   options_ = options;
+   exe_ = options_.shellPath.absolutePathNative();
+   args_ = options_.args;
+}
+
 ChildProcess::~ChildProcess()
 {
 }
@@ -231,14 +218,23 @@ Error ChildProcess::writeToStdin(const std::string& input, bool eof)
    // write synchronously to the pipe
    if (!input.empty())
    {
-      DWORD dwWritten;
-      BOOL bSuccess = ::WriteFile(pImpl_->hStdInWrite,
-                                  input.data(),
-                                  input.length(),
-                                  &dwWritten,
-                                  NULL);
-      if (!bSuccess)
-         return systemError(::GetLastError(), ERROR_LOCATION);
+      if (options().pseudoterminal)
+      {
+         Error error = WinPty::writeToPty(pImpl_->hStdInWrite, input);
+         if (error)
+            return error;
+      }
+      else
+      {
+         DWORD dwWritten;
+         BOOL bSuccess = ::WriteFile(pImpl_->hStdInWrite,
+                                     input.data(),
+                                     input.length(),
+                                     &dwWritten,
+                                     NULL);
+         if (!bSuccess)
+            return systemError(::GetLastError(), ERROR_LOCATION);
+      }
    }
 
    // close pipe if requested
@@ -250,14 +246,21 @@ Error ChildProcess::writeToStdin(const std::string& input, bool eof)
 
 Error ChildProcess::ptySetSize(int cols, int rows)
 {
-   return systemError(boost::system::errc::not_supported, ERROR_LOCATION);
+   // verify we are dealing with a pseudoterminal
+   if (!options().pseudoterminal)
+      return systemError(boost::system::errc::not_supported, ERROR_LOCATION);
+
+   return pImpl_->pty.setSize(cols, rows);
 }
 
 Error ChildProcess::ptyInterrupt()
 {
-   return systemError(boost::system::errc::not_supported, ERROR_LOCATION);
-}
+   // verify we are dealing with a pseudoterminal
+   if (!options().pseudoterminal)
+      return systemError(boost::system::errc::not_supported, ERROR_LOCATION);
 
+   return pImpl_->pty.interrupt();
+}
 
 Error ChildProcess::terminate()
 {
@@ -266,6 +269,18 @@ Error ChildProcess::terminate()
       return systemError(::GetLastError(), ERROR_LOCATION);
    else
       return Success();
+}
+
+bool ChildProcess::hasSubprocess() const
+{
+   // base class doesn't support subprocess-checking; override to implement
+   return true;
+}
+
+bool ChildProcess::hasRecentOutput() const
+{
+   // base class doesn't support output activity detection; override to implement
+   return true;
 }
 
 namespace {
@@ -312,6 +327,21 @@ Error ChildProcess::run()
    //   http://support.microsoft.com/kb/315939
    static CriticalSection s_runCriticalSection;
    CriticalSection::Scope csScope(s_runCriticalSection);
+
+   // pseudoterminal mode: use winpty to emulate Posix pseudoterminal
+   if (options_.pseudoterminal)
+   {
+      error = pImpl_->pty.start(exe_, args_, options_,
+                               &pImpl_->hStdInWrite,
+                               &pImpl_->hStdOutRead,
+                               &pImpl_->hStdErrRead,
+                               &pImpl_->hProcess);
+      if (!error)
+      {
+         pImpl_->pid = ::GetProcessId(pImpl_->hProcess);
+      }
+      return error;
+   }
 
    // Standard input pipe
    HANDLE hStdInRead;
@@ -468,6 +498,7 @@ Error ChildProcess::run()
 
    // save handle to process
    pImpl_->hProcess = pi.hProcess;
+   pImpl_->pid = ::GetProcessId(pImpl_->hProcess);
 
    // success
    return Success();
@@ -519,12 +550,15 @@ Error SyncChildProcess::waitForExit(int* pExitStatus)
 struct AsyncChildProcess::AsyncImpl
 {
    AsyncImpl()
-      : calledOnStarted_(false)
+      : calledOnStarted_(false),
+        exited_(false)
    {
    }
 
    bool calledOnStarted_;
-};
+   bool exited_;
+   boost::scoped_ptr<ChildProcessSubprocPoll> pSubprocPoll_;
+ };
 
 AsyncChildProcess::AsyncChildProcess(const std::string& exe,
                                      const std::vector<std::string>& args,
@@ -541,6 +575,12 @@ AsyncChildProcess::AsyncChildProcess(const std::string& command,
    init(command, options);
 }
 
+AsyncChildProcess::AsyncChildProcess(const ProcessOptions& options)
+      : ChildProcess(), pAsyncImpl_(new AsyncImpl())
+{
+   init(options);
+}
+
 AsyncChildProcess::~AsyncChildProcess()
 {
 }
@@ -551,12 +591,33 @@ Error AsyncChildProcess::terminate()
    return ChildProcess::terminate();
 }
 
+bool AsyncChildProcess::hasSubprocess() const
+{
+   if (pAsyncImpl_->pSubprocPoll_)
+      return pAsyncImpl_->pSubprocPoll_->hasSubprocess();
+   else
+      return true;
+}
+
+bool AsyncChildProcess::hasRecentOutput() const
+{
+   if (pAsyncImpl_->pSubprocPoll_)
+      return pAsyncImpl_->pSubprocPoll_->hasRecentOutput();
+   else
+      return true;
+}
 
 void AsyncChildProcess::poll()
 {
    // call onStarted if we haven't yet
    if (!(pAsyncImpl_->calledOnStarted_))
    {
+      // setup for subprocess polling
+      pAsyncImpl_->pSubprocPoll_.reset(new ChildProcessSubprocPoll(
+         pImpl_->pid,
+         kResetRecentDelay, kCheckSubprocDelay,
+         options().reportHasSubprocs ? core::system::hasSubprocesses : NULL));
+
       if (callbacks_.onStarted)
          callbacks_.onStarted(*this);
       pAsyncImpl_->calledOnStarted_ = true;
@@ -574,21 +635,30 @@ void AsyncChildProcess::poll()
       }
    }
 
+   bool hasRecentOutput = false;
+
    // check stdout
    std::string stdOut;
-   Error error = readPipeAvailableBytes(pImpl_->hStdOutRead, &stdOut);
+   Error error = WinPty::readFromPty(pImpl_->hStdOutRead, &stdOut);
    if (error)
       reportError(error);
    if (!stdOut.empty() && callbacks_.onStdout)
       callbacks_.onStdout(*this, stdOut);
 
    // check stderr
-   std::string stdErr;
-   error = readPipeAvailableBytes(pImpl_->hStdErrRead, &stdErr);
-   if (error)
-      reportError(error);
-   if (!stdErr.empty() && callbacks_.onStderr)
-      callbacks_.onStderr(*this, stdErr);
+   // when using winpty, hStdErrRead is optional
+   if (pImpl_->hStdErrRead)
+   {
+      std::string stdErr;
+      error = WinPty::readFromPty(pImpl_->hStdErrRead, &stdErr);
+      if (error)
+         reportError(error);
+      if (!stdErr.empty() && callbacks_.onStderr)
+      {
+         hasRecentOutput = true;
+         callbacks_.onStderr(*this, stdErr);
+      }
+   }
 
    // check for process exit
    DWORD result = ::WaitForSingleObject(pImpl_->hProcess, 0);
@@ -634,6 +704,20 @@ void AsyncChildProcess::poll()
       // call onExit
       if (callbacks_.onExit)
          callbacks_.onExit(exitStatus);
+
+      // set exited_ flag so that our exited function always
+      // returns the right value
+      pAsyncImpl_->exited_ = true;
+      pAsyncImpl_->pSubprocPoll_->stop();
+   }
+
+   // Perform optional periodic operations
+   if (pAsyncImpl_->pSubprocPoll_->poll(hasRecentOutput))
+   {
+      if (callbacks_.onHasSubprocs)
+      {
+         callbacks_.onHasSubprocs(hasSubprocess());
+      }
    }
 }
 

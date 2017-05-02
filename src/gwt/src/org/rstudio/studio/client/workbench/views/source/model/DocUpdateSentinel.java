@@ -402,6 +402,7 @@ public class DocUpdateSentinel
       {
          if (path != null)
          {
+            // notify that a save is underway (for collaborative editing)
             eventBus_.fireEvent(new SaveInitiatedEvent(path, getId()));
          }
       }

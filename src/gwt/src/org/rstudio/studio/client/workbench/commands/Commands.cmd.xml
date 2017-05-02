@@ -102,9 +102,10 @@ well as menu structures (for main menu and popup menus).
          <cmd refid="shareProject"/>
          <separator/>
          <menu label="_Import Dataset">
+            <cmd refid="importDatasetFromCsvUsingBase"/>
+            <cmd refid="importDatasetFromCsvUsingReadr"/>
             <cmd refid="importDatasetFromFile"/>
             <cmd refid="importDatasetFromURL"/>
-            <cmd refid="importDatasetFromCSV"/>
             <separator/>
             <cmd refid="importDatasetFromXLS"/>
             <separator/>
@@ -287,7 +288,8 @@ well as menu structures (for main menu and popup menus).
          <separator/>
          
          <cmd refid="activateSource"/>
-         <cmd refid="activateConsole"/>
+         <cmd refid="activateConsolePane"/>
+         <cmd refid="activateTerminal"/>
          <cmd refid="activateHelp"/>
          <separator/>
          <cmd refid="activateHistory"/>
@@ -428,7 +430,19 @@ well as menu structures (for main menu and popup menus).
          </menu>
          <separator/>
          <cmd refid="showShellDialog"/>
-         <cmd refid="newTerminal"/>
+         <menu label="_Terminal">
+            <cmd refid="newTerminal"/>
+            <separator/>
+            <cmd refid="renameTerminal"/>
+            <cmd refid="showTerminalInfo"/>
+            <separator/>
+            <cmd refid="activateTerminal"/>
+            <cmd refid="previousTerminal"/>
+            <cmd refid="nextTerminal"/>
+            <separator/>
+            <cmd refid="clearTerminalScrollbackBuffer"/>
+            <cmd refid="closeTerminal"/>
+          </menu>
          <menu label="Addins">
             <cmd refid="addinsMru0"/>
             <cmd refid="addinsMru1"/>
@@ -469,12 +483,13 @@ well as menu structures (for main menu and popup menus).
          <separator/>
          <menu label="_Cheatsheets">
             <cmd refid="openRStudioIDECheatSheet"/>'
-            <cmd refid="openDataWranglingCheatSheet"/>
+            <cmd refid="openDataTransformationCheatSheet"/>
             <cmd refid="openDataVisualizationCheatSheet"/>
+            <cmd refid="openPackageDevelopmentCheatSheet"/>
+            <cmd refid="openShinyCheatSheet"/>
+            <cmd refid="openSparklyrCheatSheet"/>
             <cmd refid="openRMarkdownCheatSheet"/>
             <cmd refid="openRMarkdownReferenceGuide"/>
-            <cmd refid="openShinyCheatSheet"/>
-            <cmd refid="openPackageDevelopmentCheatSheet"/>
          </menu>
          <separator/>
          <cmd refid="helpKeyboardShortcuts"/>
@@ -580,8 +595,8 @@ well as menu structures (for main menu and popup menus).
          <shortcut refid="expandToMatching" value="Ctrl+Shift+E" if="org.rstudio.core.client.BrowseCap.isMacintosh()"/>
          <shortcut refid="expandToMatching" value="Ctrl+Shift+Alt+E" if="!org.rstudio.core.client.BrowseCap.isMacintosh()"/>
          <shortcut refid="toggleDocumentOutline" value="Cmd+Shift+O"/>
-         <shortcut value="Ctrl+Alt+Up" title="Add cursor above current cursor"/>
-         <shortcut value="Ctrl+Alt+Down" title="Add cursor below current cursor"/>
+         <shortcut refid="addCursorAbove" value="Ctrl+Alt+Up"/>
+         <shortcut refid="addCursorBelow" value="Ctrl+Alt+Down"/>
          <shortcut refid="expandSelection" value="Ctrl+Shift+Up" if="!org.rstudio.core.client.BrowseCap.isMacintosh()"/>
          <shortcut refid="shrinkSelection" value="Ctrl+Shift+Down" if="!org.rstudio.core.client.BrowseCap.isMacintosh()"/>
          <shortcut refid="expandSelection" value="Cmd+Alt+Shift+Up" if="org.rstudio.core.client.BrowseCap.isMacintosh()"/>
@@ -591,8 +606,6 @@ well as menu structures (for main menu and popup menus).
          <shortcut refid="splitIntoLines" value="Ctrl+Alt+A" disableModes="emacs"/>
          <shortcut refid="goToStartOfCurrentScope" value="Ctrl+Alt+A" disableModes="default,vim"/>
          <shortcut refid="goToEndOfCurrentScope" value="Ctrl+Alt+E" disableModes="default,vim"/>
-         <shortcut value="Cmd+Alt+Up" title="Add cursor above current cursor"/>
-         <shortcut value="Cmd+Alt+Down" title="Add cursor below current cursor"/>
          <shortcut value="Ctrl+Alt+Shift+Up" title="Move active cursor up"/>
          <shortcut value="Ctrl+Alt+Shift+Down" title="Move active cursor down"/>
       </shortcutgroup>
@@ -601,7 +614,8 @@ well as menu structures (for main menu and popup menus).
          <shortcut refid="activateConsole" value="Alt+X" disableModes="default,vim"/>
          
          <shortcut refid="activateSource" value="Ctrl+1"/>
-         <shortcut refid="activateConsole" value="Ctrl+2"/>
+         <shortcut refid="activateConsolePane" value="Ctrl+2"/>
+         <shortcut refid="activateTerminal" value="Ctrl+Shift+T"/>
          <shortcut refid="activateHelp" value="Ctrl+3"/>
          <shortcut refid="activateHistory" value="Ctrl+4"/>
          <shortcut refid="activateFiles" value="Ctrl+5"/>
@@ -733,13 +747,20 @@ well as menu structures (for main menu and popup menus).
          <shortcut refid="consoleClear" value="Ctrl+L" disableModes="emacs"/>
          <shortcut value="Cmd+Up" title="Popup Command History"/>
       </shortcutgroup>
+      <shortcutgroup name="Terminal">
+         <shortcut refid="newTerminal" value="Alt+Shift+T"/>
+         <shortcut refid="renameTerminal" value="Alt+Shift+R"/>
+         <shortcut refid="clearTerminalScrollbackBuffer" value="Ctrl+Shift+L"/>
+         <shortcut refid="previousTerminal" value="Ctrl+Alt+F11"/>
+         <shortcut refid="nextTerminal" value="Ctrl+Alt+F12"/>
+      </shortcutgroup>
 
       <!-- 
       Shortcuts in this group won't be shown in the quick reference card. 
        -->
       <shortcutgroup name="Not Displayed">
          <shortcut refid="layoutZoomSource" value="Ctrl+Shift+1"/>
-         <shortcut refid="layoutZoomConsole" value="Ctrl+Shift+2"/>
+         <shortcut refid="layoutZoomConsolePane" value="Ctrl+Shift+2"/>
          <shortcut refid="layoutZoomHelp" value="Ctrl+Shift+3"/>
          <shortcut refid="layoutZoomHistory" value="Ctrl+Shift+4"/>
          <shortcut refid="layoutZoomFiles" value="Ctrl+Shift+5"/>
@@ -1088,6 +1109,11 @@ well as menu structures (for main menu and popup menus).
         label="Move Focus to Source"
         menuLabel="Move Focus to Sou_rce"/>
         
+   <cmd id="activateConsolePane"
+        label="Move Focus to Console"
+        menuLabel="Move Focus to _Console"
+        windowMode="main"/>
+        
    <cmd id="activateConsole"
         label="Move Focus to Console"
         menuLabel="Move Focus to _Console"
@@ -1157,6 +1183,12 @@ well as menu structures (for main menu and popup menus).
         checkable="true"
         label="Zoom Source"
         menuLabel="Zoom Sou_rce"/>
+        
+   <cmd id="layoutZoomConsolePane"
+        checkable="true"
+        label="Zoom Console Pane"
+        menuLabel="Zoom Console Pane"
+        windowMode="main"/>
         
    <cmd id="layoutZoomConsole"
         checkable="true"
@@ -1366,6 +1398,14 @@ well as menu structures (for main menu and popup menus).
         desc="Expand selection to matching bracket"
         context="editor"/>
         
+   <cmd id="addCursorAbove"
+        menuLabel="Add Cursor Above Current Cursor"
+        context="editor"/>
+        
+   <cmd id="addCursorBelow"
+        menuLabel="Add Cursor Below Current Cursor"
+        context="editor"/>
+        
    <cmd id="splitIntoLines"
         menuLabel="Split Into Lines"
         desc="Create a new cursor on each line in current selection"
@@ -1426,7 +1466,25 @@ well as menu structures (for main menu and popup menus).
         menuLabel="Re-Run _Previous"
         desc="Re-run the previous code region"
         context="r"/>
-        
+
+   <cmd id="executeCurrentLine"
+        label="Execute Current Line"
+        menuLabel="Execute Current _Line"
+        desc="Execute the line which contains the cursor"
+        context="r"/>
+
+   <cmd id="executeCurrentStatement"
+        label="Execute Current Statement"
+        menuLabel="Execute Current _Statement"
+        desc="Execute the entire R statement which contains the cursor."
+        context="r"/>
+
+   <cmd id="executeCurrentParagraph"
+        label="Execute Current Paragraph"
+        menuLabel="Execute Current _Paragraph"
+        desc="Execute the current paragraph of code, delimited by blank lines."
+        context="r"/>
+
    <cmd id="insertChunk"
         menuLabel="_Insert Chunk"
         desc="Insert a new code chunk"
@@ -1708,10 +1766,25 @@ well as menu structures (for main menu and popup menus).
          menuLabel="Package Development with devtools"
          desc="Package development with devtools"
          context="help"/>
+         
+    <cmd id="openDataImportCheatSheet"
+         menuLabel="Import Data with readr"
+         desc="Import data with readr"
+         context="help"/>
 
     <cmd id="openDataWranglingCheatSheet"
          menuLabel="Data Manipulation with dplyr, tidyr"
          desc="Data manipulation with dplyr and tidyr"
+         context="help"/>
+         
+    <cmd id="openDataTransformationCheatSheet"
+          menuLabel="Data Transformation with dplyr"
+          desc="Data transformation with dplyr"
+          context="help"/>
+          
+    <cmd id="openSparklyrCheatSheet"
+         menuLabel="Interfacing Spark with sparklyr"
+         desc="Interfacing Apache Spark with sparklyr"
          context="help"/>
 
     <cmd id="openRMarkdownCheatSheet"
@@ -1725,8 +1798,8 @@ well as menu structures (for main menu and popup menus).
          context="help"/>
 
     <cmd id="openShinyCheatSheet"
-         menuLabel="Shiny Web Applications"
-         desc="Shiny web applications"
+         menuLabel="Web Applications with shiny"
+         desc="Build web applications with Shiny"
          context="help"/>
 
    <cmd id="knitDocument"
@@ -1828,6 +1901,13 @@ well as menu structures (for main menu and popup menus).
         menuLabel="Copy..."
         buttonLabel="Copy"
         desc="Copy selected file or folder"
+        rebindable="false"/>
+        
+   <cmd id="copyFileTo"
+        label="Copy Files To..."
+        menuLabel="Copy To..."
+        buttonLabel="Copy To"
+        desc="Copy selected file or folder to another folder"
         rebindable="false"/>
         
    <cmd id="moveFiles"
@@ -1973,9 +2053,11 @@ well as menu structures (for main menu and popup menus).
         context="vcs"/>
         
    <cmd id="consoleClear"
+        buttonLabel=""
         label="Clear Console"
         menuLabel="Cle_ar Console"
-        windowMode="main"/>
+        windowMode="main"
+        desc="Clear Console"/>
         
    <cmd id="interruptR"
         label="Interrupt R Session"
@@ -2220,15 +2302,25 @@ well as menu structures (for main menu and popup menus).
         label="Import Dataset from File..."
         menuLabel="From _Local File..."
         windowMode="main"/>
-        
+
    <cmd id="importDatasetFromURL"
         label="Import Dataset from URL..."
         menuLabel="From _Web URL..."
         windowMode="main"/>
 
-   <cmd id="importDatasetFromCSV"
-        label="Import Dataset from CSV..."
-        menuLabel="From _CSV..."
+   <cmd id="importDatasetFromCsv"
+        label="From CSV"
+        menuLabel="From _CSV"
+        windowMode="main"/>
+
+   <cmd id="importDatasetFromCsvUsingReadr"
+        label="From Text (readr)..."
+        menuLabel="From Text (_readr)..."
+        windowMode="main"/>
+
+   <cmd id="importDatasetFromCsvUsingBase"
+        label="From Text (base)..."
+        menuLabel="From Text (_base)..."
         windowMode="main"/>
 
    <cmd id="importDatasetFromSAV"
@@ -2368,59 +2460,50 @@ well as menu structures (for main menu and popup menus).
         windowMode="main"/>
         
    <cmd id="newTerminal"
-        label="Create New Terminal Session"
-        menuLabel="New Terminal Session"
+        label="New Terminal"
+        menuLabel="_New Terminal"
         desc="Execute shell commands(s)"
         windowMode="main"/>
 
- <cmd id="renameTerminal"
-        label="Rename Terminal"
-        menuLabel="Rename Terminal Session"
-        desc="Change terminal session name"
+   <cmd id="activateTerminal"
+        label="Move Focus to Terminal"
+        menuLabel="_Move Focus to Terminal"
         windowMode="main"/>
+        
+   <cmd id="renameTerminal"
+        label="Rename Current Terminal"
+        menuLabel="_Rename Current Terminal"
+        desc="Change terminal session name"/>
 
- <cmd id="closeTerminal"
-        label="Close Terminal Session"
-        menuLabel="Close Terminal Session"
-        desc="Close terminal session"
-        windowMode="main"/>
+   <cmd id="closeTerminal"
+        label="Close Current Terminal"
+        menuLabel="Cl_ose Current Terminal"
+        desc="Close terminal session"/>
 
- <cmd id="clearTerminalScrollbackBuffer"
-        label="Clear Terminal Buffer"
-        menuLabel="Clear Terminal"
-        desc="Clear terminal scrollback buffer"
-        windowMode="main"/>
+   <cmd id="clearTerminalScrollbackBuffer"
+        buttonLabel=""
+        label="Clear Current Terminal"
+        menuLabel="_Clear Current Terminal"
+        desc="Clear terminal"/>
 
- <cmd id="terminalSession1"
-        label="Terminal 1"
-        menuLabel="Terminal 1"
-        desc="Terminal 1"
-        windowMode="main"/>
-           
- <cmd id="terminalSession2"
-        label="Terminal 2"
-        menuLabel="Terminal 2"
-        desc="Terminal 2"
-        windowMode="main"/>
-           
- <cmd id="terminalSession3"
-        label="Terminal 3"
-        menuLabel="Terminal 3"
-        desc="Terminal 3"
-        windowMode="main"/>
-           
- <cmd id="terminalSession4"
-        label="Terminal 4"
-        menuLabel="Terminal 4"
-        desc="Terminal 4"
-        windowMode="main"/>
-           
- <cmd id="terminalSession5"
-        label="Terminal 5"
-        menuLabel="Terminal 5"
-        desc="Terminal 5"
-        windowMode="main"/>
-           
+   <cmd id="previousTerminal"
+        label="Previous Terminal"
+        buttonLabel=""
+        menuLabel="_Previous Terminal"
+        desc="Show previous terminal"/>
+
+   <cmd id="nextTerminal"
+        label="Next Terminal"
+        buttonLabel=""
+        menuLabel="_Next Terminal"
+        desc="Show next terminal"/>
+
+   <cmd id="showTerminalInfo"
+        label="Terminal Diagnostics..."
+        buttonLabel=""
+        menuLabel="Terminal _Diagnostics..."
+        desc="Show Info on Current Terminal"/>
+ 
    <cmd id="addinsMru0" visible="false" rebindable="false"/>
    <cmd id="addinsMru1" visible="false" rebindable="false"/>
    <cmd id="addinsMru2" visible="false" rebindable="false"/>
@@ -2946,7 +3029,7 @@ well as menu structures (for main menu and popup menus).
             
     <cmd id="disconnectConnection"
          menuLabel="Disconnect"
-         desc="Disconect from a connection"
+         desc="Disconnect from a connection"
          windowMode="main"/>
        
     <cmd id="refreshConnection"

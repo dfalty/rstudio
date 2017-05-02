@@ -29,7 +29,7 @@
 
 using namespace boost::system ;
 
-namespace boost {
+namespace RSTUDIO_BOOST_NAMESPACE {
 namespace interprocess {
 
 class interprocess_error_category : public error_category
@@ -163,7 +163,7 @@ namespace errc {
 enum errc_t {
    thread_resource_error = 1
 };
-} // namesapce thread_errc
+} // namespace thread_errc
 
 
 class thread_error_category : public error_category

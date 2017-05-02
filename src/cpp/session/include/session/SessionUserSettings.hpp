@@ -25,10 +25,13 @@
 #include <core/Settings.hpp>
 #include <core/FilePath.hpp>
 #include <core/StringUtils.hpp>
+#include <core/text/AnsiCodeParser.hpp>
 
 #include <core/json/Json.hpp>
 
 #include <core/system/FileChangeEvent.hpp>
+
+#include <session/SessionTerminalShell.hpp>
 
 namespace rstudio {
 namespace session {
@@ -100,6 +103,7 @@ public:
    bool handleErrorsInUserCodeOnly() const;
    int shinyViewerType() const;
    bool enableRSConnectUI() const;
+   core::text::AnsiCodeMode ansiConsoleMode() const;
 
    bool rProfileOnResume() const;
    void setRprofileOnResume(bool rProfileOnResume);
@@ -115,6 +119,9 @@ public:
 
    bool showLastDotValue() const;
    void setShowLastDotValue(bool show);
+
+   console_process::TerminalShell::TerminalShellType defaultTerminalShellValue() const;
+   void setDefaultTerminalShellValue(console_process::TerminalShell::TerminalShellType shell);
 
    core::FilePath initialWorkingDirectory() const;
    void setInitialWorkingDirectory(const core::FilePath& filePath);
@@ -247,6 +254,7 @@ private:
    mutable boost::scoped_ptr<bool> pHandleErrorsInUserCodeOnly_;
    mutable boost::scoped_ptr<int> pShinyViewerType_;
    mutable boost::scoped_ptr<bool> pEnableRSConnectUI_;
+   mutable boost::scoped_ptr<int> pAnsiConsoleMode_;
    
    // diagnostic-related prefs
    mutable boost::scoped_ptr<bool> pLintRFunctionCalls_;

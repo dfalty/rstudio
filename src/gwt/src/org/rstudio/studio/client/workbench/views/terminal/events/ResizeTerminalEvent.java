@@ -27,6 +27,10 @@ public class ResizeTerminalEvent extends GwtEvent<Handler>
 {  
    public interface Handler extends EventHandler
    {
+      /**
+       * Event sent when terminal has resized
+       * @param event event containing new text dimensions
+       */
       void onResizeTerminal(ResizeTerminalEvent event);
    }
    
@@ -57,8 +61,8 @@ public class ResizeTerminalEvent extends GwtEvent<Handler>
    {
       handler.onResizeTerminal(this);
    } 
-   
-   
+
+
    /**
     * @return number of rows in resized terminal
     */

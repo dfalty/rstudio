@@ -1,7 +1,7 @@
 /*
  * Process.hpp
  *
- * Copyright (C) 2009-12 by RStudio, Inc.
+ * Copyright (C) 2009-17 by RStudio, Inc.
  *
  * Unless you have received this program directly from RStudio pursuant
  * to the terms of a commercial license agreement with RStudio, then
@@ -19,6 +19,7 @@
 
 #include <vector>
 
+#include <boost/enable_shared_from_this.hpp>
 #include <boost/optional.hpp>
 #include <boost/utility.hpp>
 #include <boost/function.hpp>
@@ -35,6 +36,9 @@ class Error;
 
 namespace system {
 
+extern const char* const kSmartTerm;
+extern const char* const kDumbTerm;
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // Run child process synchronously
@@ -44,11 +48,27 @@ namespace system {
 // Struct for specifying pseudoterminal options
 struct Pseudoterminal
 {
-   Pseudoterminal(int cols, int rows)
-      : cols(cols), rows(rows)
+   Pseudoterminal(
+#ifdef _WIN32
+         const FilePath& winptyPath,
+         bool plainText,
+         bool conerr,
+#endif
+         int cols, int rows)
+      :
+#ifdef _WIN32
+        winptyPath(winptyPath),
+        plainText(plainText),
+        conerr(conerr),
+#endif
+        cols(cols), rows(rows)
    {
    }
-
+#ifdef _WIN32
+   FilePath winptyPath;
+   bool plainText;
+   bool conerr;
+#endif
    int cols;
    int rows;
 };
@@ -63,15 +83,18 @@ struct ProcessOptions
         detachProcess(false),
         createNewConsole(false),
         breakawayFromJob(false),
-        redirectStdErrToStdOut(false)
+        cols(80),
+        rows(25),
+        redirectStdErrToStdOut(false),
+        reportHasSubprocs(false)
 #else
       : terminateChildren(false),
         smartTerminal(false),
         detachSession(false),
         cols(80),
         rows(25),
-        redirectStdErrToStdOut(false)
-   
+        redirectStdErrToStdOut(false),
+        reportHasSubprocs(false)
 #endif
    {
    }
@@ -91,23 +114,22 @@ struct ProcessOptions
    // CreateJobObject/CREATE_BREAKAWAY_FROM_JOB to get the same effect
    bool terminateChildren;
 
-   // Use xterm as terminal type and disable canonical line-by-line
+   // Use kSmartTerm as terminal type and disable canonical line-by-line
    // I/O processing
    bool smartTerminal;
    
 #ifndef _WIN32
    // Calls ::setsid after fork for POSIX (no effect on Windows)
    bool detachSession;
+#endif
 
    // attach the child process to pseudoterminal pipes
    boost::optional<Pseudoterminal> pseudoterminal;
-   
+
    // pseudoterminal size
    int cols;
    int rows;
    
-#endif
-
 #ifdef _WIN32
    // Creates the process with DETACHED_PROCESS
    bool detachProcess;
@@ -119,7 +141,16 @@ struct ProcessOptions
    bool breakawayFromJob;
 #endif
 
+   // interactive terminal shell
+   FilePath shellPath;
+
+   // interactive terminal shell arguments
+   std::vector<std::string> args;
+
    bool redirectStdErrToStdOut;
+
+   // Periodically report if process has any child processes
+   bool reportHasSubprocs;
 
    // If not empty, these two provide paths that stdout and stderr
    // (respectively) should be redirected to. Note that this ONLY works
@@ -205,7 +236,7 @@ Error runCommand(const std::string& command,
 //
 
 // Operations that can be performed from within ProcessCallbacks
-class ProcessOperations
+class ProcessOperations : public boost::enable_shared_from_this<ProcessOperations>
 {
 public:
    virtual ~ProcessOperations() {}
@@ -220,6 +251,11 @@ public:
 
    // Terminate the process (SIGTERM)
    virtual Error terminate() = 0;
+
+   boost::weak_ptr<ProcessOperations> getWeakPtr()
+   {
+      return weak_from_this();
+   }
 };
 
 // Callbacks for reporting various states and streaming output (note that
@@ -254,6 +290,9 @@ struct ProcessCallbacks
    // Called after the process has exited. Passes exitStatus (see ProcessResult
    // comment above for potential values)
    boost::function<void(int)> onExit;
+
+   // Called periodically to report if this process has subprocesses
+   boost::function<void(bool)> onHasSubprocs;
 };
 
 ProcessCallbacks createProcessCallbacks(
@@ -287,6 +326,11 @@ public:
                     const ProcessOptions& options,
                     const ProcessCallbacks& callbacks);
 
+   // Run an interactive terminal asynchronously (same as above but uses
+   // platform-specific implementation to determine what to execute).
+   Error runTerminal(const ProcessOptions& options,
+                     const ProcessCallbacks& callbacks);
+
    // Run a child asynchronously, invoking the completed callback when the
    // process exits. Note that if input is provided then then the standard
    // input stream is closed (so EOF is sent) after the input is written.
@@ -315,8 +359,12 @@ public:
             const boost::function<void(const ProcessResult&)>& onCompleted);
 
 
-   // Check whether any children are currently active
+   // Check whether any children are currently running
    bool hasRunningChildren();
+
+   // Check whether any children consider themselves active; non-active
+   // processes may be terminated without warning.
+   bool hasActiveChildren();
 
    // Poll for child (output and exit) events. returns true if there
    // are still children being supervised after the poll
@@ -325,7 +373,7 @@ public:
    // Terminate all running children
    void terminateAll();
 
-   // Wait for all children to exit. Returns false if the operaiton timed out
+   // Wait for all children to exit. Returns false if the operation timed out
    bool wait(
       const boost::posix_time::time_duration& pollingInterval =
          boost::posix_time::milliseconds(100),

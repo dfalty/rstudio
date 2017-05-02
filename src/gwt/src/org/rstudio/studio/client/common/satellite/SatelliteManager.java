@@ -35,6 +35,8 @@ import org.rstudio.studio.client.application.ApplicationUncaughtExceptionHandler
 import org.rstudio.studio.client.application.Desktop;
 import org.rstudio.studio.client.application.events.CrossWindowEvent;
 import org.rstudio.studio.client.application.events.EventBus;
+import org.rstudio.studio.client.application.events.ThemeChangedEvent;
+import org.rstudio.studio.client.application.ui.RStudioThemes;
 import org.rstudio.studio.client.common.GlobalDisplay.NewWindowOptions;
 import org.rstudio.studio.client.common.satellite.events.AllSatellitesClosingEvent;
 import org.rstudio.studio.client.common.satellite.events.SatelliteClosedEvent;
@@ -42,6 +44,7 @@ import org.rstudio.studio.client.common.satellite.events.WindowClosedEvent;
 import org.rstudio.studio.client.common.satellite.events.WindowOpenedEvent;
 import org.rstudio.studio.client.workbench.model.Session;
 import org.rstudio.studio.client.workbench.model.SessionInfo;
+import org.rstudio.studio.client.workbench.prefs.model.UIPrefs;
 import org.rstudio.studio.client.workbench.views.source.SourceWindowManager;
 
 import com.google.gwt.core.client.JavaScriptObject;
@@ -60,10 +63,12 @@ public class SatelliteManager implements CloseHandler<Window>
          Session session,
          EventBus events,
          Provider<SourceWindowManager> pSourceWindowManager,
-         Provider<ApplicationUncaughtExceptionHandler> pUncaughtExceptionHandler)
+         Provider<ApplicationUncaughtExceptionHandler> pUncaughtExceptionHandler,
+         Provider<UIPrefs> pUIPrefs)
    {
       session_ = session;
       events_ = events;
+      pUIPrefs_ = pUIPrefs;
       pSourceWindowManager_ = pSourceWindowManager;
       pUncaughtExceptionHandler_ = pUncaughtExceptionHandler;
       initializeCommonCallbacks();
@@ -278,6 +283,7 @@ public class SatelliteManager implements CloseHandler<Window>
                 !satellite.getWindow().isClosed())
             {
                satellite.getWindow().focus();
+
                break;
             }
          }   
@@ -466,6 +472,11 @@ public class SatelliteManager implements CloseHandler<Window>
       JavaScriptObject params = satelliteParams_.get(name);
       if (params != null)
          callSetParams(satelliteWnd, params);
+
+      // set themes
+      events_.fireEventToSatellite(new ThemeChangedEvent(
+         pUIPrefs_.get().getFlatTheme().getGlobalValue()),
+         satelliteWnd);
    }
    
    // called to register child windows (not necessarily full-fledged 
@@ -709,7 +720,8 @@ public class SatelliteManager implements CloseHandler<Window>
       private final String name_;
       private final WindowEx window_;
    }
-   
+ 
+   private final Provider<UIPrefs> pUIPrefs_;
 }
 
 
